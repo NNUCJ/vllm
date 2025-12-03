@@ -234,7 +234,8 @@ class EngineCore:
                 and not self.batch_queue.full()):
             scheduler_output = self.scheduler.schedule()
             if scheduler_output.total_num_scheduled_tokens > 0:
-                future = self.model_executor.execute_model(scheduler_output)
+                future = self.model_executor.execute_model(scheduler_output, non_block=True)
+                logger.info(f"***********************************\nfuture class{future}")
                 self.batch_queue.put_nowait(
                     (future, scheduler_output))  # type: ignore
 

@@ -1,7 +1,12 @@
 # SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 
 from vllm import LLM, SamplingParams
+import os
 
+os.environ["CUDA_VISIBLE_DEVICE"]="0, 1"
+import logging
+logging.basicConfig(level=logging.DEBUG)
 # Sample prompts.
 prompts = [
     "Hello, my name is",
@@ -12,16 +17,24 @@ prompts = [
 # Create a sampling params object.
 sampling_params = SamplingParams(temperature=0.8, top_p=0.95)
 
-# Create an LLM.
-llm = LLM(model="facebook/opt-125m")
-# Generate texts from the prompts. The output is a list of RequestOutput objects
-# that contain the prompt, generated text, and other information.
-outputs = llm.generate(prompts, sampling_params)
-# Print the outputs.
-print("\nGenerated Outputs:\n" + "-" * 60)
-for output in outputs:
-    prompt = output.prompt
-    generated_text = output.outputs[0].text
-    print(f"Prompt:    {prompt!r}")
-    print(f"Output:    {generated_text!r}")
-    print("-" * 60)
+
+def main():
+    # Create an LLM.async_scheduling=True,
+    llm = LLM(model="/data/chengjie/models/Qwen/Qwen3-8B", tensor_parallel_size=2, 
+               enforce_eager=True, async_scheduling=True, enable_prefix_caching=False)
+    # Generate texts from the prompts.
+    # The output is a list of RequestOutput objects
+    # that contain the prompt, generated text, and other information.
+    outputs = llm.generate(prompts, sampling_params)
+    # Print the outputs.
+    print("\nGenerated Outputs:\n" + "-" * 60)
+    for output in outputs:
+        prompt = output.prompt
+        generated_text = output.outputs[0].text
+        print(f"Prompt:    {prompt!r}")
+        print(f"Output:    {generated_text!r}")
+        print("-" * 60)
+
+
+if __name__ == "__main__":
+    main()

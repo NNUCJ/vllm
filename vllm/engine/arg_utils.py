@@ -217,6 +217,8 @@ class EngineArgs:
     reasoning_parser: Optional[str] = None
     use_tqdm_on_load: bool = LoadConfig.use_tqdm_on_load
 
+    async_scheduling: bool = SchedulerConfig.async_scheduling
+
     def __post_init__(self):
         if not self.tokenizer:
             self.tokenizer = self.model
@@ -788,6 +790,14 @@ class EngineArgs:
             const="True",
             help='If set, the prefill requests can be chunked based on the '
             'max_num_batched_tokens.')
+        parser.add_argument(
+            '--async-scheduling', 
+            action=StoreBoolean,
+            default=EngineArgs.async_scheduling,
+            nargs="?",
+            const="False",
+            help=''
+        )
         parser.add_argument('--speculative-config',
                             type=json.loads,
                             default=None,
@@ -1273,7 +1283,10 @@ class EngineArgs:
             max_num_partial_prefills=self.max_num_partial_prefills,
             max_long_partial_prefills=self.max_long_partial_prefills,
             long_prefill_token_threshold=self.long_prefill_token_threshold,
+            async_scheduling=self.async_scheduling,
         )
+
+        logger.info(f"####################\nscheduler_config: \n{scheduler_config}")
 
         lora_config = LoRAConfig(
             bias_enabled=self.enable_lora_bias,

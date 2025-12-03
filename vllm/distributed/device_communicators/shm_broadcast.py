@@ -7,6 +7,7 @@ import time
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from multiprocessing import shared_memory
+from threading import Event 
 from typing import List, Optional, Tuple, Union
 from unittest.mock import patch
 
@@ -400,7 +401,9 @@ class MessageQueue:
                 break
 
     @contextmanager
-    def acquire_read(self, timeout: Optional[float] = None):
+    def acquire_read(self,
+                    timeout: Optional[float] = None,
+                    cancel: Optional[Event] = None):
         assert self._is_local_reader, "Only readers can acquire read"
         start_time = time.monotonic()
         n_warning = 1
@@ -419,7 +422,9 @@ class MessageQueue:
 
                     # Release the processor to other threads
                     sched_yield()
-
+                    if cancel is not None and cancel.is_set():
+                        raise RuntimeError("Dequeue cancelled.")
+                    
                     # if we wait for a long time, log a message
                     if (time.monotonic() - start_time
                             > VLLM_RINGBUFFER_WARNING_INTERVAL * n_warning):
@@ -464,10 +469,12 @@ class MessageQueue:
         if self.n_remote_reader > 0:
             self.remote_socket.send(serialized_obj)
 
-    def dequeue(self, timeout: Optional[float] = None):
+    def dequeue(self, 
+                timeout: Optional[float] = None,
+                cancel: Optional[Event] = None):
         """ Read from message queue with optional timeout (in seconds) """
         if self._is_local_reader:
-            with self.acquire_read(timeout) as buf:
+            with self.acquire_read(timeout, cancel) as buf:
                 overflow = buf[0] == 1
                 if not overflow:
                     # no need to know the size of serialized object

@@ -165,7 +165,8 @@ class Scheduler(SchedulerInterface):
                 req_index += 1
                 continue
 
-            num_new_tokens = (request.num_tokens_with_spec -
+            num_new_tokens = (request.num_tokens_with_spec + 
+                              request.num_output_placeholders -
                               request.num_computed_tokens)
             if (0 < self.scheduler_config.long_prefill_token_threshold <
                     num_new_tokens):
@@ -174,24 +175,50 @@ class Scheduler(SchedulerInterface):
             num_new_tokens = min(num_new_tokens, token_budget)
             assert num_new_tokens > 0
 
+            num_new_tokens = min(
+                num_new_tokens,
+                self.max_model_len - 1 - request.num_computed_tokens)
             # Schedule encoder inputs.
+            encoder_inputs_to_schedule = None
+            new_encoder_budget = encoder_budget
             if request.has_encoder_inputs:
-                (encoder_inputs_to_schedule, num_new_tokens,
-                 new_encoder_budget) = self._try_schedule_encoder_inputs(
-                     request, request.num_computed_tokens, num_new_tokens,
-                     encoder_budget)
-                if num_new_tokens == 0:
-                    # The request cannot be scheduled because the encoder budget
-                    # or the encoder cache is exhausted.
-                    # NOTE(woosuk): By using `continue` instead of `break` here,
-                    # we intentionally relax the strict FCFS scheduling policy
-                    # to allow lower-priority requests to be scheduled when a
-                    # higher-priority request is blocked by encoder constraints.
-                    req_index += 1
-                    continue
-            else:
-                encoder_inputs_to_schedule = None
-                new_encoder_budget = encoder_budget
+                (encoder_inputs_to_schedule, num_new_tokens, 
+                new_encoder_budget) = self._try_schedule_encoder_inputs(
+                    request, request.num_computed_tokens, num_new_tokens,
+                    encoder_budget
+                ) 
+            if num_new_tokens == 0:
+                # The request cannot be scheduled because one of the following
+                # reasons:
+                # 1. No new tokens to schedule. This may happen when
+                #    (1) PP>1 and we have already scheduled all prompt tokens
+                #    but they are not finished yet.
+                #    (2) Async scheduling and the request has reached to either
+                #    its max_total_tokens or max_model_len.
+                # 2. The encoder budget is exhausted.
+                # 3. The encoder cache is exhausted.
+                # NOTE(woosuk): Here, by doing `continue` instead of `break`,
+                # we do not strictly follow the FCFS scheduling policy and
+                # allow the lower-priority requests to be scheduled.
+                req_index += 1
+                continue
+            # if request.has_encoder_inputs:
+            #     (encoder_inputs_to_schedule, num_new_tokens,
+            #      new_encoder_budget) = self._try_schedule_encoder_inputs(
+            #          request, request.num_computed_tokens, num_new_tokens,
+            #          encoder_budget)
+            #     if num_new_tokens == 0:
+            #         # The request cannot be scheduled because the encoder budget
+            #         # or the encoder cache is exhausted.
+            #         # NOTE(woosuk): By using `continue` instead of `break` here,
+            #         # we intentionally relax the strict FCFS scheduling policy
+            #         # to allow lower-priority requests to be scheduled when a
+            #         # higher-priority request is blocked by encoder constraints.
+            #         req_index += 1
+            #         continue
+            # else:
+            #     encoder_inputs_to_schedule = None
+            #     new_encoder_budget = encoder_budget
 
             while True:
                 new_blocks = self.kv_cache_manager.allocate_slots(
@@ -302,6 +329,7 @@ class Scheduler(SchedulerInterface):
                     continue
 
                 # Get already-cached tokens.
+                # ?????? 与后续版本存在差异
                 computed_blocks, num_computed_tokens = \
                     self.kv_cache_manager.get_computed_blocks(request)
                 # Number of tokens to be scheduled.
@@ -443,6 +471,15 @@ class Scheduler(SchedulerInterface):
             grammar_bitmask=grammar_bitmask,
         )
 
+        self._update_after_schedule(scheduler_output)
+        return scheduler_output
+
+
+    def _update_after_schedule(
+          self,
+          scheduler_output: SchedulerOutput
+        ) -> None:
+        
         # Advance the number of computed tokens for the request AFTER
         # the request is scheduled.
         # 1. The scheduler_output of the current step has to include the
@@ -452,11 +489,14 @@ class Scheduler(SchedulerInterface):
         #    scheduling step.
         # 3. If some tokens (e.g. spec tokens) are rejected later, the number of
         #    computed tokens will be adjusted in update_from_output.
+        num_scheduled_tokens = scheduler_output.num_scheduled_tokens
         for req_id, num_scheduled_token in num_scheduled_tokens.items():
-            self.requests[req_id].num_computed_tokens += num_scheduled_token
+            request = self.requests[req_id]
+            request.num_computed_tokens += num_scheduled_token
+            # self.requests[req_id].num_computed_tokens += num_scheduled_token
 
         self.finished_req_ids = set()
-        return scheduler_output
+
 
     def _make_cached_request_data(
         self,
@@ -582,16 +622,25 @@ class Scheduler(SchedulerInterface):
         # NOTE(woosuk): As len(self.running) can be up to 1K or more, the below
         # loop can be a performance bottleneck. We should do our best to avoid
         # expensive operations inside the loop.
+        # for request in self.running:
+        stopped_running_reqs: set[Request] = set()
+        stopped_preempted_reqs: set[Request] = set()
+        # for req_id, num_tokens_scheduled in num_scheduled_tokens.items():
         for request in self.running:
             req_id = request.request_id
             num_tokens_scheduled = num_scheduled_tokens.get(req_id, 0)
+            assert num_tokens_scheduled > 0
+            # request = self.requests.get(req_id)
+            # num_tokens_scheduled = num_scheduled_tokens.get(req_id, 0)
             if num_tokens_scheduled == 0:
                 # The request was not scheduled in this step.
                 new_running.append(request)
                 continue
+            # if request is None:
+            #     continue
 
             req_index = model_runner_output.req_id_to_index[req_id]
-            generated_token_ids = sampled_token_ids[req_index]
+            generated_token_ids = sampled_token_ids[req_index] if sampled_token_ids else [] 
 
             scheduled_spec_token_ids = (
                 scheduler_output.scheduled_spec_decode_tokens.get(req_id))
@@ -631,10 +680,10 @@ class Scheduler(SchedulerInterface):
             stopped = False
             new_logprobs = None
             new_token_ids = generated_token_ids
-
-            # Append generated tokens and check for stop. Note that if
-            # a request is still being prefilled, we expect the model runner
-            # to return empty token ids for the request.
+            status_before_stop = request.status
+            # # Append generated tokens and check for stop. Note that if
+            # # a request is still being prefilled, we expect the model runner
+            # # to return empty token ids for the request.
             for num_new, output_token_id in enumerate(new_token_ids, 1):
                 request.append_output_token_ids(output_token_id)
 
@@ -642,10 +691,19 @@ class Scheduler(SchedulerInterface):
                 # This must be called before we make the EngineCoreOutput.
                 stopped = check_stop(request, self.max_model_len)
                 if stopped:
-                    self._free_request(request)
+                    self._free_request(request) # 该步骤要不要处理
                     del new_token_ids[num_new:]  # Trim new tokens if needed.
                     break
-
+            # if new_token_ids:
+            #     new_token_ids, stopped = self._update_request_with_output(
+            #         request, new_token_ids)
+            # if stopped:
+            #     self._free_request(request)
+            #     if status_before_stop == RequestStatus.RUNNING:
+            #         stopped_running_reqs.add(request)
+            #     else:
+            #         stopped_preempted_reqs.add(request)
+                    
             # Extract sample logprobs if needed.
             if request.sampling_params.logprobs is not None and logprobs:
                 # NOTE: once we support N tokens per step (spec decode),
@@ -692,6 +750,26 @@ class Scheduler(SchedulerInterface):
 
         return engine_core_outputs
 
+    def _update_request_with_output(
+        self,
+        request: Request,
+        new_token_ids: list[int],
+    ) -> tuple[list[int], bool]:
+        # Append generated tokens and check for stop. Note that if
+        # a request is still being prefilled, we expect the model runner
+        # to return empty token ids for the request.
+        stopped = False
+        for num_new, output_token_id in enumerate(new_token_ids, 1):
+            request.append_output_token_ids(output_token_id)
+
+            # Check for stop and update request state
+            # This must be called before we make the EngineCoreOutput.
+            stopped  = check_stop(request, self.max_model_len)
+            if stopped:
+                del new_token_ids[num_new:]  # Trim new tokens if needed 
+                break
+            return new_token_ids, stopped
+             
     def add_request(self, request: Request) -> None:
         self.waiting.append(request)
         self.requests[request.request_id] = request

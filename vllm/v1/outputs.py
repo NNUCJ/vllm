@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
+from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import NamedTuple, Optional
 
@@ -100,6 +101,19 @@ class ModelRunnerOutput:
     # [prompt_len]
     prompt_logprobs_dict: dict[str, Optional[LogprobsTensors]]
 
+
+class AsyncModelRunnerOutput(ABC):
+    
+    @abstractmethod
+    def get_output(self) -> ModelRunnerOutput:
+        """Get the ModelRunnerOutput for this async output.
+        
+        This is a blocking call that waits until the results are ready, which
+        might involve copying device tensors to the host.
+        This method should only be called once per AsyncModelRunnerOutput.
+        """
+        pass
+  
 
 EMPTY_MODEL_RUNNER_OUTPUT = ModelRunnerOutput(
     req_ids=[],

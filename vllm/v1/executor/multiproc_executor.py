@@ -5,14 +5,17 @@ import pickle
 import signal
 import sys
 import time
+import queue
+import threading
 import traceback
 import weakref
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 from enum import Enum, auto
-from functools import partial
+from functools import cached_property, partial
 from multiprocessing.process import BaseProcess
 from typing import Any, Callable, Optional, Union
-
+from threading import Thread
 import cloudpickle
 import psutil
 import zmq
@@ -27,7 +30,9 @@ from vllm.executor.multiproc_worker_utils import (
 from vllm.logger import init_logger
 from vllm.utils import (get_distributed_init_method, get_mp_context,
                         get_open_port, get_open_zmq_ipc_path, zmq_socket_ctx)
+from vllm.v1.core.sched.output import SchedulerOutput
 from vllm.v1.executor.abstract import Executor
+from vllm.v1.outputs import (AsyncModelRunnerOutput, ModelRunnerOutput)
 from vllm.worker.worker_base import WorkerWrapperBase
 
 logger = init_logger(__name__)
@@ -42,7 +47,8 @@ class MultiprocExecutor(Executor):
         # Call self.shutdown at exit to clean up
         # and ensure workers will be terminated.
         self._finalizer = weakref.finalize(self, self.shutdown)
-
+        self.shutdown_event = threading.Event()
+        self.io_thread_pool : Optional[ThreadPoolExecutor] = None
         # The child processes will send SIGUSR1 when unrecoverable
         # errors happen.
         def sigusr1_handler(signum, frame):
@@ -92,12 +98,36 @@ class MultiprocExecutor(Executor):
         for w in self.workers:
             w.worker_response_mq.wait_until_ready()
 
+        if self.max_concurrent_batches > 1:
+            self.io_thread_pool = ThreadPoolExecutor(
+                max_workers=1, thread_name_prefix="mp_exec_io")
+        
+        self.output_rank = self._get_output_rank()
+        
+
+    def execute_model(self, 
+                      scheduler_output:SchedulerOutput,
+                      non_block: bool = False,
+        ) -> Union[ModelRunnerOutput, Future[ModelRunnerOutput]]:
+        (output, )  = self.collective_rpc(
+            "execute_model",
+            args=(scheduler_output, ),
+            unique_reply_rank=self.output_rank,
+            non_block=non_block
+        )
+        logger.info(f"+++++++++++++++\noutput type {output}")
+        return output
+
+
     def collective_rpc(self,
                        method: Union[str, Callable],
                        timeout: Optional[float] = None,
                        args: tuple = (),
-                       kwargs: Optional[dict] = None) -> list[Any]:
-        start_time = time.monotonic()
+                       kwargs: Optional[dict] = None,
+                       non_block: bool = False,
+                       unique_reply_rank: Optional[int] = None) -> list[Any]:
+        
+        deadline = None if timeout is None else time.monotonic() + timeout
         kwargs = kwargs or {}
 
         # NOTE: If the args are heterogeneous, then we pack them into a list,
@@ -109,21 +139,53 @@ class MultiprocExecutor(Executor):
             else:
                 send_method = cloudpickle.dumps(
                     method, protocol=pickle.HIGHEST_PROTOCOL)
-            self.rpc_broadcast_mq.enqueue((send_method, args, kwargs))
+            self.rpc_broadcast_mq.enqueue((send_method, args, kwargs, unique_reply_rank))
 
-            responses = [None] * self.world_size
-            for w in self.workers:
-                dequeue_timeout = timeout - (time.monotonic() - start_time
-                                             ) if timeout is not None else None
+            # responses = [None] * self.world_size
+            responses = []
+            workers = (self.workers[unique_reply_rank], 
+                       ) if unique_reply_rank is not None else self.workers
+            
+            def get_response(w: WorkerProcHandle, 
+                            dequeue_timeout: Optional[float] = None,
+                            cancel_event:Optional[threading.Event] = None):
                 status, result = w.worker_response_mq.dequeue(
-                    timeout=dequeue_timeout)
-
+                    timeout=dequeue_timeout, cancel=cancel_event)
+                
                 if status != WorkerProc.ResponseStatus.SUCCESS:
                     raise RuntimeError(
                         "Worker failed with error %s, please check the"
                         " stack trace above for the root cause", result)
+                return result
+            
 
-                responses[w.rank] = result
+            # for w in self.workers:
+            for w in workers:
+                dequeue_timeout = None if deadline is None else (
+                    deadline - time.monotonic())
+                if self.io_thread_pool is not None:
+                    result = self.io_thread_pool.submit(
+                        get_response, w, dequeue_timeout, self.shutdown_event
+                    )
+                    logger.info(f"-------------\nresult type {type(result)}")
+                    if not non_block:
+                        result = result.result()
+                elif not non_block:
+                    result = get_response(w, dequeue_timeout, self.shutdown_event)
+                else:
+                    raise RuntimeError("non_block can only be used when"
+                                       " max_concurrent_batches > 1")
+                # status, result = w.worker_response_mq.dequeue(
+                #     timeout=dequeue_timeout)
+
+                # if status != WorkerProc.ResponseStatus.SUCCESS:
+                #     raise RuntimeError(
+                #         "Worker failed with error %s, please check the"
+                #         " stack trace above for the root cause", result)
+                logger.info(f"-------------\nresult type {result}")
+                
+                # responses[w.rank] = result
+                responses.append(result)
 
             return responses
         except TimeoutError as e:
@@ -182,6 +244,17 @@ class MultiprocExecutor(Executor):
         self.collective_rpc("check_health", timeout=10)
         return
 
+    @cached_property
+    def max_concurrent_batches(self) -> int:
+        if self.scheduler_config.async_scheduling:
+            logger.info(f"$$$$$$$$$$$$$$$$$$$$$$$")
+            return 2
+        return self.parallel_config.pipeline_parallel_size
+    
+    def _get_output_rank(self) -> int:
+        # In multiproc executor, each worker has its own rank.
+        # We assume the output rank is 0 for simplicity.
+        return self.world_size - self.parallel_config.pipeline_parallel_size
 
 @dataclass
 class WorkerProcHandle:
@@ -231,6 +304,19 @@ class WorkerProc:
 
         # Initializes a message queue for sending the model output
         self.worker_response_mq = MessageQueue(1, 1)
+
+        schduler_config = vllm_config.scheduler_config
+        self.use_async_scheduling = schduler_config.async_scheduling
+        if self.use_async_scheduling:
+            self.async_output_queue: queue.Queue = queue.Queue()
+            self.async_output_copy_thread = Thread(
+                target=self.async_output_busy_loop,
+                daemon=True,
+                name="WorkerAsyncOutputCopy"
+            )
+            self.async_output_copy_thread.start()
+        
+
         worker_response_mq_handle = self.worker_response_mq.export_handle()
 
         # Send Readiness signal to EngineCore process.
@@ -271,6 +357,7 @@ class WorkerProc:
         # Run EngineCore busy loop in background process.
         proc = context.Process(target=WorkerProc.worker_main,
                                kwargs=process_kwargs,
+                               name=f"VllmWorker-{rank}",
                                daemon=True)
 
         with zmq_socket_ctx(ready_path, zmq.constants.PULL) as ready_socket:
@@ -310,7 +397,7 @@ class WorkerProc:
         # Either SIGTERM or SIGINT will terminate the worker
         signal.signal(signal.SIGTERM, signal_handler)
         signal.signal(signal.SIGINT, signal_handler)
-
+        shutdown_event = threading.Event()
         worker = None
         try:
             worker = WorkerProc(*args, **kwargs)
@@ -320,7 +407,7 @@ class WorkerProc:
             worker.rpc_broadcast_mq.wait_until_ready()
             worker.worker_response_mq.wait_until_ready()
 
-            worker.worker_busy_loop()
+            worker.worker_busy_loop(cancel=shutdown_event)
 
         except SystemExit:
             logger.debug("Worker interrupted.")
@@ -362,10 +449,48 @@ class WorkerProc:
         SUCCESS = auto()
         FAILURE = auto()
 
-    def worker_busy_loop(self):
+    def enqueue_output(self, output):
+        """Prepares output from the worker and enqueues it to the
+        worker_response_mq. If the output is an Exception, it is
+        converted to a FAILURE response.
+        """   
+        if isinstance(output, AsyncModelRunnerOutput):
+            logger.info(f"9999999999\n getting output from AsyncModelRunnerOutput, {output}")
+            output = output.get_output()
+            
+        
+        if isinstance(output, Exception):
+            result = (WorkerProc.ResponseStatus.FAILURE, str(output))
+
+        else:
+            result = (WorkerProc.ResponseStatus.SUCCESS, output)
+        if(response_mq := self.worker_response_mq) is not None:
+            logger.info(f"-------------\nenqueuing output of type {(result)}")
+            response_mq.enqueue(result)
+    
+    def handle_output(self, output: Any):
+        """Handles output from the worker. If async scheduling is enabled,
+        it is passed to the async_output_busy_loop thread. Otherwise, it is
+        enqueued directly to the worker_response_mq.
+        """
+        if self.use_async_scheduling:
+            self.async_output_queue.put(output)
+        else:
+            self.enqueue_output(output) 
+    
+    def async_output_busy_loop(self):
+        """Entrypoint for the thread which handles outputs asynchronously."""
+        while True:
+            output = self.async_output_queue.get()
+            logger.info(f"-------------\nasync output of type {output}")
+            self.enqueue_output(output)
+    
+    def worker_busy_loop(self, cancel: Optional[threading.Event] = None):
         """Main busy loop for Multiprocessing Workers"""
         while True:
-            method, args, kwargs = self.rpc_broadcast_mq.dequeue()
+            # method, args, kwargs = self.rpc_broadcast_mq.dequeue()
+            method, args, kwargs, output_rank  = self.rpc_broadcast_mq.dequeue(
+                cancel=cancel)
 
             try:
                 if isinstance(method, str):
@@ -380,9 +505,13 @@ class WorkerProc:
                 logger.exception("WorkerProc hit an exception: %s", exc_info=e)
                 # exception might not be serializable, so we convert it to
                 # string, only for logging purpose.
-                self.worker_response_mq.enqueue(
-                    (WorkerProc.ResponseStatus.FAILURE, str(e)))
+                # self.worker_response_mq.enqueue(
+                #     (WorkerProc.ResponseStatus.FAILURE, str(e)))
+                if output_rank is None or output_rank == self.rank:
+                    self.handle_output(e)
                 continue
 
-            self.worker_response_mq.enqueue(
-                (WorkerProc.ResponseStatus.SUCCESS, output))
+            # self.worker_response_mq.enqueue(
+            #     (WorkerProc.ResponseStatus.SUCCESS, output))
+            if output_rank is None or output_rank == self.rank:
+                self.handle_output(output)

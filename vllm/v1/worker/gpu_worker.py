@@ -2,7 +2,7 @@
 """A GPU worker class."""
 import gc
 import os
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Optional, Union
 
 import torch
 import torch.distributed
@@ -21,7 +21,7 @@ from vllm.model_executor import set_random_seed
 from vllm.platforms import current_platform
 from vllm.utils import GiB_bytes
 from vllm.v1.kv_cache_interface import KVCacheConfig, KVCacheSpec
-from vllm.v1.outputs import ModelRunnerOutput
+from vllm.v1.outputs import ModelRunnerOutput, AsyncModelRunnerOutput
 from vllm.v1.worker.gpu_model_runner import GPUModelRunner
 from vllm.v1.worker.worker_base import WorkerBase
 
@@ -238,9 +238,14 @@ class Worker(WorkerBase):
     def execute_model(
         self,
         scheduler_output: "SchedulerOutput",
-    ) -> Optional[ModelRunnerOutput]:
+    ) -> Optional[Union[ModelRunnerOutput, AsyncModelRunnerOutput]]:
         output = self.model_runner.execute_model(scheduler_output)
-        return output if self.is_driver_worker else None
+        # return output if self.is_driver_worker else None
+        # if isinstance(output, (ModelRunnerOutput, AsyncModelRunneroutput)) and self.is_driver_worker:
+        #     return output 
+        if isinstance(output, (ModelRunnerOutput, AsyncModelRunnerOutput)): 
+            return output 
+        return None
 
     def profile(self, is_start: bool = True):
         if self.profiler is None:
