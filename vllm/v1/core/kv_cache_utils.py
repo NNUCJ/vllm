@@ -109,10 +109,11 @@ class KVCacheBlock:
 
     # Block ID, ranging from 0 to num_gpu_blocks - 1.
     block_id: int
-    # Reference count.
+    # Reference count. 表示有多少请求正在使用该block
     ref_cnt: int = 0
     # The hash key (block hash + group id) of the block, only available
     # when the block is full and cached.
+    # 用作已完成计算块的唯一标志
     _block_hash: BlockHashWithGroupId | None = None
 
     # Used to construct a doubly linked list for free blocks.

@@ -1719,6 +1719,7 @@ class GPUModelRunner(
         :return: Optional[cascade_attn_prefix_lens]
             cascade_attn_prefix_lens is 2D: ``[kv_cache_group_id][attn_group_idx]``,
             None if we should not use cascade attention
+            存储每个 KV 缓存组中每个注意力组的前缀长度
         """
 
         use_cascade_attn = False
