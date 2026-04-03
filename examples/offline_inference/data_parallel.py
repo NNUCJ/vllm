@@ -29,23 +29,88 @@ Multi-node:
                     --dp-master-port=13345
 """
 
+import argparse
 import os
+os.environ["VLLM_EXECUTE_MODEL_TIMEOUT_SECONDS"] = "36000"
+os.environ["CUDA_VISIBLE_DEVICES"] = "4,5,6,7"
+# os.environ["VLLM_ENABLE_V1_MULTIPROCESSING"] = "0"
 from time import sleep
 
+import vllm.platforms as vllm_platforms
 from vllm import LLM, EngineArgs, SamplingParams
-from vllm.platforms import current_platform
+from vllm.config.device import DeviceConfig
 from vllm.utils.argparse_utils import FlexibleArgumentParser
 from vllm.utils.network_utils import get_open_port
+
+
+def add_minimal_engine_args(parser: FlexibleArgumentParser) -> None:
+    """Fallback parser for environments where device auto-detection fails."""
+    parser.add_argument(
+        "--model",
+        type=str,
+        default="/data/models/deepseek/deepseek-moe-16b-base",
+    )
+    parser.add_argument(
+        "--tokenizer",
+        type=str,
+        default=None,
+    )
+    parser.add_argument(
+        "--trust-remote-code",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+    )
+    parser.add_argument(
+        "--dtype",
+        type=str,
+        default="auto",
+    )
+    parser.add_argument(
+        "--enforce-eager",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+    )
+    parser.add_argument(
+        "--device",
+        type=str,
+        default="cuda",
+        choices=["auto", "cuda", "cpu", "tpu", "xpu"],
+    )
+    parser.add_argument(
+        "--tensor-parallel-size",
+        "-tp",
+        type=int,
+        default=1,
+    )
+    parser.add_argument(
+        "--data-parallel-size",
+        "-dp",
+        type=int,
+        default=1,
+    )
+    parser.add_argument(
+        "--enable-expert-parallel",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+    )
 
 
 def create_parser():
     parser = FlexibleArgumentParser(description="Data Parallel Inference")
 
-    # Add all engine args
-    EngineArgs.add_cli_args(parser)
+    # Avoid partially populating the parser when platform auto-detection
+    # fails in environments where NVML/CUDA probing is unavailable.
+    try:
+        DeviceConfig()
+        EngineArgs.add_cli_args(parser)
+    except RuntimeError as exc:
+        if "Failed to infer device type" not in str(exc):
+            raise
+        add_minimal_engine_args(parser)
     parser.set_defaults(
-        model="ibm-research/PowerMoE-3b",
+        model="/data/models/deepseek/deepseek-moe-16b-base",
         enable_expert_parallel=True,
+        enforce_eager=True,
     )
 
     # Add DP-specific args (separate from engine args to avoid conflicts)
@@ -90,12 +155,14 @@ def main(
     dp_master_ip,
     dp_master_port,
     engine_args,
+    requested_device,
 ):
     os.environ["VLLM_DP_RANK"] = str(global_dp_rank)
     os.environ["VLLM_DP_RANK_LOCAL"] = str(local_dp_rank)
     os.environ["VLLM_DP_SIZE"] = str(dp_size)
     os.environ["VLLM_DP_MASTER_IP"] = dp_master_ip
     os.environ["VLLM_DP_MASTER_PORT"] = str(dp_master_port)
+    maybe_force_platform(requested_device)
 
     # CUDA_VISIBLE_DEVICES for each DP rank is set automatically inside the
     # engine processes.
@@ -106,7 +173,7 @@ def main(
         "The president of the United States is",
         "The capital of France is",
         "The future of AI is",
-    ] * 100
+    ] * 10
 
     # with DP, each rank should process different prompts.
     # usually all the DP ranks process a full dataset,
@@ -152,6 +219,43 @@ def main(
     sleep(1)
 
 
+def resolve_dp_master_port(dp_num_nodes: int, dp_master_port: int) -> int:
+    if dp_num_nodes > 1:
+        return dp_master_port
+    if dp_master_port:
+        return dp_master_port
+    try:
+        return get_open_port()
+    except PermissionError:
+        return 29500
+
+
+def maybe_force_platform(device: str | None) -> None:
+    if not device or vllm_platforms.current_platform.device_type:
+        return
+
+    if device == "cuda":
+        from vllm.platforms.cuda import CudaPlatform
+
+        vllm_platforms.current_platform = CudaPlatform()
+    elif device == "cpu":
+        from vllm.platforms.cpu import CpuPlatform
+
+        vllm_platforms.current_platform = CpuPlatform()
+    elif device == "xpu":
+        from vllm.platforms.xpu import XPUPlatform
+
+        vllm_platforms.current_platform = XPUPlatform()
+    elif device == "tpu":
+        from vllm.platforms.tpu import TpuPlatform
+
+        vllm_platforms.current_platform = TpuPlatform()
+
+    import vllm.engine.arg_utils as arg_utils
+
+    arg_utils.current_platform = vllm_platforms.current_platform
+
+
 if __name__ == "__main__":
     parser = create_parser()
     args = vars(parser.parse_args())
@@ -164,22 +268,25 @@ if __name__ == "__main__":
     dp_master_port = args.pop("dp_master_port")
     timeout = args.pop("timeout")
 
+    requested_device = args.pop("device", None)
+    maybe_force_platform(requested_device)
+
     # Remaining args are engine args
     engine_args = args
 
     if dp_num_nodes == 1:
         dp_master_ip = "127.0.0.1"
-        dp_master_port_val = get_open_port()
+        dp_master_port_val = resolve_dp_master_port(dp_num_nodes, dp_master_port)
     else:
         dp_master_ip = dp_master_addr
-        dp_master_port_val = dp_master_port
+        dp_master_port_val = resolve_dp_master_port(dp_num_nodes, dp_master_port)
 
     assert dp_size % dp_num_nodes == 0, "dp_size should be divisible by dp_num_nodes"
     dp_per_node = dp_size // dp_num_nodes
 
     from multiprocessing import Process
 
-    if current_platform.is_rocm():
+    if vllm_platforms.current_platform.is_rocm():
         from multiprocessing import set_start_method
 
         set_start_method("spawn", force=True)
@@ -197,6 +304,7 @@ if __name__ == "__main__":
                 dp_master_ip,
                 dp_master_port_val,
                 engine_args,
+                requested_device,
             ),
         )
         proc.start()
