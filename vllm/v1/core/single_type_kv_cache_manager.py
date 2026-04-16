@@ -114,6 +114,7 @@ class SingleTypeKVCacheManager(ABC):
             return max(num_required_blocks - num_req_blocks, 0)
 
         num_skipped_tokens = self.get_num_skipped_tokens(total_computed_tokens)
+        # prefix cache 命中的块数(已在cache中，不需要新分配)
         num_local_computed_blocks = len(new_computed_blocks) + num_req_blocks
         # Number of whole blocks that are skipped by the attention window.
         # If nothing is skipped, this is 0.
@@ -121,6 +122,7 @@ class SingleTypeKVCacheManager(ABC):
         # We need blocks for the non-skipped suffix. If there are still
         # local-computed blocks inside the window, they contribute to the
         # required capacity; otherwise, skipped blocks dominate.
+        #  使用max 是因为这两者有重叠（prefix cache 命中的块可能在 skip 范围内），但无论哪种情况，取较大值就能覆盖"不需要新分配"的块数
         num_new_blocks = max(
             num_required_blocks - max(num_skipped_blocks, num_local_computed_blocks),
             0,

@@ -19,7 +19,7 @@ def make_num_tokens_across_dp(dp_size: int, num_tokens: int) -> torch.Tensor | N
     return torch.full((dp_size,), num_tokens, dtype=torch.int32, device="cpu")
 
 
-def sync_cudagraph_and_dp_padding(
+def All2AllManagerBasesync_cudagraph_and_dp_padding(
     cudagraph_manager: CudaGraphManager,
     desired_batch_desc: BatchExecutionDescriptor,
     num_tokens: int,

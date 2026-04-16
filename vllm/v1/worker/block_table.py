@@ -109,10 +109,13 @@ class BlockTable:
             block_ids = self.map_to_kernel_blocks(
                 np.array(block_ids), self.blocks_per_kv_block, self._kernel_block_arange
             )
-
+        # 记录当前row已经使用的block数量，block_ids是新添加的block id列表，二者相加得到当前行的block数量
         num_blocks = len(block_ids)
+        # num_blocks_per_row 一个意味数组，记录当前每个请求已有多少个块
         start = self.num_blocks_per_row[row_idx]
+        # 更新 每个请求 已有的块数
         self.num_blocks_per_row[row_idx] += num_blocks
+        # 将新块 ID 写入 block_table 的 numpy 数组
         self.block_table.np[row_idx, start : start + num_blocks] = block_ids
 
     def add_row(self, block_ids: list[int], row_idx: int) -> None:

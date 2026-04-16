@@ -79,25 +79,25 @@ __launch_bounds__(TPB) __global__
     __shared__ typename BlockReduce::TempStorage tmpStorage;
 
     __shared__ float normalizing_factor;
-    __shared__ float float_max;
+    __shared__ float float_max; // 全block 共享max 
 
     const int thread_row_offset = blockIdx.x * num_cols;
 
-    float threadData(-FLT_MAX);
+    float threadData(-FLT_MAX); // 每个线程本地的max 初值
 
     // Don't touch finished rows.
     if ((finished != nullptr) && finished[blockIdx.x])
     {
         return;
     }
-
+    // 第一次扫描:每个线程找自己负责列的 max，如果专家数量过大，大于线程的数量256，每个线程就需要读取多个数据进行比较
     for (int ii = threadIdx.x; ii < num_cols; ii += TPB)
     {
         const int idx = thread_row_offset + ii;
         const float val = toFloat(input[idx]);
         threadData = max(val, threadData);
     }
-
+    // Block 级归约:256 个线程 → 1 个 max 值
     const float maxElem = BlockReduce(tmpStorage).Reduce(threadData, CubMaxOp());
     if (threadIdx.x == 0)
     {
@@ -106,14 +106,14 @@ __launch_bounds__(TPB) __global__
     __syncthreads();
 
     threadData = 0;
-
+    // 第二次扫描:每线程累加 exp(x - max)
     for (int ii = threadIdx.x; ii < num_cols; ii += TPB)
     {
         const int idx = thread_row_offset + ii;
         const float val = toFloat(input[idx]);
         threadData += expf(val - float_max);
     }
-
+    // Block 级归约:256 个线程 → 1 个 Σ
     const auto Z = BlockReduce(tmpStorage).Reduce(threadData, CubAddOp());
 
     if (threadIdx.x == 0)
@@ -167,7 +167,7 @@ __launch_bounds__(TPB) __global__ void moeTopK(
     const float* bias)
 {
 
-    using cub_kvp = cub::KeyValuePair<int, float>;
+    using cub_kvp = cub::KeyValuePair<int, float>;  // 一个结构体,key = expert_id, value = 概率值。cub::ArgMax 会比较 value,保留 key。
     using BlockReduce = cub::BlockReduce<cub_kvp, TPB>;
     __shared__ typename BlockReduce::TempStorage tmpStorage;
 
@@ -181,7 +181,8 @@ __launch_bounds__(TPB) __global__ void moeTopK(
     const int thread_read_offset = blockIdx.x * num_experts;
     float selected_sum = 0.f;
     for (int k_idx = 0; k_idx < k; ++k_idx)
-    {
+    {   
+        //①本线程扫自己负责的列,找本地 argmax
         thread_kvp.key = 0;
         thread_kvp.value = -1.f; // This is OK because inputs are probabilities
 
@@ -197,7 +198,7 @@ __launch_bounds__(TPB) __global__ void moeTopK(
             } else {
               inp_kvp.value = inputs_after_softmax[idx];
             }
-
+            // ②屏蔽之前已选中的专家:把它们的 value 替换成当前 best,等价于跳过
             for (int prior_k = 0; prior_k < k_idx; ++prior_k)
             {
                 const int prior_winning_expert = indices[k * block_row + prior_k];
@@ -207,11 +208,12 @@ __launch_bounds__(TPB) __global__ void moeTopK(
                     inp_kvp = thread_kvp;
                 }
             }
-
+            // ③累积本地 argmax
             thread_kvp = arg_max(inp_kvp, thread_kvp);
         }
-
+        // ④Block 级 argmax 归约 
         const cub_kvp result_kvp = BlockReduce(tmpStorage).Reduce(thread_kvp, arg_max);
+        // ⑤线程 0 写出结果
         if (threadIdx.x == 0)
         {
             // Ignore experts the node isn't responsible for with expert parallelism
@@ -231,7 +233,7 @@ __launch_bounds__(TPB) __global__ void moeTopK(
         }
         __syncthreads();
     }
-
+    // renormalize 分支
     // Renormalize the k weights for this row to sum to 1, if requested.
     if (renormalize) {
         if (threadIdx.x == 0) {
@@ -259,6 +261,17 @@ __launch_bounds__(TPB) __global__ void moeTopK(
      faster than the computing softmax and topK separately (only tested on CUDA yet).
   2) This implementation assumes k is small, but will work for any k.
 */
+/*
+模版参数解释
+        VPT：               Value per Thread, 每个线程处理的专家数量 
+        NUM_EXPERTS：       编译期专家数 (1/2/4/.../512 或 192/320/...)
+        WARPS_PER_CTA:      每个block 的warp 数量(固定为4)
+        BYTES_PER_LDG：     每次向量化 load 多少个字节的（4/8/16）
+        WARP_SIZE_PARAM：   warp size (CUDA 固定为32，ROCm 可能是32或64)
+        IndType:            indices 数据类型
+        InputType:          logits 数据类型 (float/bf16/half)
+        ScoringFunc SF:     计算 gating 权重的函数 (softmax/sigmoid) 
+ */
 
 template <int VPT, int NUM_EXPERTS, int WARPS_PER_CTA, int BYTES_PER_LDG, int WARP_SIZE_PARAM, typename IndType,
           typename InputType = float, ScoringFunc SF>
@@ -276,10 +289,11 @@ __launch_bounds__(WARPS_PER_CTA* WARP_SIZE_PARAM) __global__
     static_assert(BYTES_PER_LDG <= 16, "BYTES_PER_LDG must be leq 16");
 
     // Number of bytes each thread pulls in per load
-    static constexpr int ELTS_PER_LDG = BYTES_PER_LDG / sizeof(InputType);
-    static constexpr int ELTS_PER_ROW = NUM_EXPERTS;
-    static constexpr int THREADS_PER_ROW = ELTS_PER_ROW / VPT;
-    static constexpr int LDG_PER_THREAD = VPT / ELTS_PER_LDG;
+    // 编译期常量推导
+    static constexpr int ELTS_PER_LDG = BYTES_PER_LDG / sizeof(InputType);      // 每次加载元素个数
+    static constexpr int ELTS_PER_ROW = NUM_EXPERTS;                            // 一行的元素数量
+    static constexpr int THREADS_PER_ROW = ELTS_PER_ROW / VPT;                  // 每行分配的线程数量   
+    static constexpr int LDG_PER_THREAD = VPT / ELTS_PER_LDG;                   // 每个线程需要的加载次数
 
     if constexpr (std::is_same_v<InputType, __nv_bfloat16> || std::is_same_v<InputType, __half>) {
         static_assert(ELTS_PER_LDG == 1 || ELTS_PER_LDG % 2 == 0,
@@ -293,8 +307,11 @@ __launch_bounds__(WARPS_PER_CTA* WARP_SIZE_PARAM) __global__
     static_assert(THREADS_PER_ROW <= WARP_SIZE_PARAM, "THREADS_PER_ROW can be at most warp size");
 
     // We have NUM_EXPERTS elements per row. We specialize for small #experts
+    // ELTS_PER_WARP 表示一个warp 处理多少个元素
     static constexpr int ELTS_PER_WARP = WARP_SIZE_PARAM * VPT;
+    // ROWS_PER_WARP 表示一个warp 处理多少行
     static constexpr int ROWS_PER_WARP = ELTS_PER_WARP / ELTS_PER_ROW;
+    // 一个block 处理多少行
     static constexpr int ROWS_PER_CTA = WARPS_PER_CTA * ROWS_PER_WARP;
 
     // Restrictions for previous section.
@@ -303,15 +320,19 @@ __launch_bounds__(WARPS_PER_CTA* WARP_SIZE_PARAM) __global__
     // ===================== From this point, we finally start computing run-time variables. ========================
 
     // Compute CTA and warp rows. We pack multiple rows into a single warp, and a block contains WARPS_PER_CTA warps.
-    // This, each block processes a chunk of rows. We start by computing the start row for each block.
+    // This, each block processes a chunk of rows. We start by computing the start row for each block.的
+    // 当前block 处理的 row 的起始行号
     const int cta_base_row = blockIdx.x * ROWS_PER_CTA;
 
     // Now, using the base row per thread block, we compute the base row per warp.
+    // 当前warp 处理的 row 的起始行号   
     const int warp_base_row = cta_base_row + threadIdx.y * ROWS_PER_WARP;
 
     // The threads in a warp are split into sub-groups that will work on a row.
     // We compute row offset for each thread sub-group
+    //thread_row_in_warp 表示当前线程，属于当前warp 的第几个 thread group(一个thread group 负责一行)
     const int thread_row_in_warp = threadIdx.x / THREADS_PER_ROW;
+    // 当前线程处理的 row 的行号    
     const int thread_row = warp_base_row + thread_row_in_warp;
 
     // Threads with indices out of bounds should early exit here.
@@ -322,20 +343,25 @@ __launch_bounds__(WARPS_PER_CTA* WARP_SIZE_PARAM) __global__
     const bool row_is_active = finished ? !finished[thread_row] : true;
 
     // We finally start setting up the read pointers for each thread. First, each thread jumps to the start of the
-    // row it will read.
+    // row it will read，用于定位到哪一行
     const InputType* thread_row_ptr = input + thread_row * ELTS_PER_ROW;
 
     // Now, we compute the group each thread belong to in order to determine the first column to start loads.
+    // 计算本线程组负责的列起点
     const int thread_group_idx = threadIdx.x % THREADS_PER_ROW;
+    // 该线程负责的第一个元素的列号
     const int first_elt_read_by_thread = thread_group_idx * ELTS_PER_LDG;
     const InputType* thread_read_ptr = thread_row_ptr + first_elt_read_by_thread;
 
     // Finally, we pull in the data from global mem
+    // 存储的是无偏的 softmax/sigmoid 概率值，即纯粹的路由权重。这个值最终会被写入 output（即 topk_weights），作为该专家的实际权重用于后续 MoE 加权求和。
     float row_chunk[VPT];
 
     // NOTE(zhuhaoran): dispatch different input types loading, BF16/FP16 convert to float
+    // Float路径： 直接向量化 copy 无类型转换
     if constexpr (std::is_same_v<InputType, float>) {
         using VecType = AlignedArray<float, ELTS_PER_LDG>;
+        // 一次性加载 ELTS_PER_LDG 个 float 到 row_chunk
         VecType* row_chunk_vec_ptr = reinterpret_cast<VecType*>(&row_chunk);
         const VecType* vec_thread_read_ptr = reinterpret_cast<const VecType*>(thread_read_ptr);
 #pragma unroll
@@ -389,7 +415,7 @@ __launch_bounds__(WARPS_PER_CTA* WARP_SIZE_PARAM) __global__
             }
         }
     }
-
+    // 计算当前线程内的max 
     if constexpr (SF == SCORING_SOFTMAX) {
       // First, we perform a max reduce within the thread.
       float thread_max = row_chunk[0];
@@ -398,13 +424,14 @@ __launch_bounds__(WARPS_PER_CTA* WARP_SIZE_PARAM) __global__
         thread_max = max(thread_max, row_chunk[ii]);
       }
 
-// Now, we find the max within the thread group and distribute among the threads. We use a butterfly reduce.
+    // Now, we find the max within the thread group and distribute among the threads. We use a butterfly reduce.
+    // 线程组内的 max reduce，最终每个线程都知道本行的 max 值
 #pragma unroll
       for (int mask = THREADS_PER_ROW / 2; mask > 0; mask /= 2)
       {
         thread_max = max(thread_max, VLLM_SHFL_XOR_SYNC_WIDTH(thread_max, mask, THREADS_PER_ROW));
       }
-
+      // 经过 log2(THREADS_PER_ROW) 轮, 所有线程拿到全局 max
       // From this point, thread max in all the threads have the max within the row.
       // Now, we subtract the max from each element in the thread and take the exp. We also compute the thread local sum.
       float row_sum = 0;
@@ -417,6 +444,7 @@ __launch_bounds__(WARPS_PER_CTA* WARP_SIZE_PARAM) __global__
 
 // Now, we perform the sum reduce within each thread group. Similar to the max reduce, we use a bufferfly pattern.
 #pragma unroll
+      // bufferfly reduce to get the row sum for each thread 
       for (int mask = THREADS_PER_ROW / 2; mask > 0; mask /= 2)
       {
         row_sum += VLLM_SHFL_XOR_SYNC_WIDTH(row_sum, mask, THREADS_PER_ROW);
@@ -445,7 +473,14 @@ __launch_bounds__(WARPS_PER_CTA* WARP_SIZE_PARAM) __global__
     static constexpr int COLS_PER_GROUP_LDG = ELTS_PER_LDG * THREADS_PER_ROW;
 
     // If bias is not null, use biased value for selection
-    float row_chunk_for_choice[VPT];
+    /*
+    存储的是用于比较选择的值
+        有 bias 时：row_chunk[i] + bias[expert]，即概率 + 校正偏置
+        无 bias 时：直接拷贝 row_chunk[i]，两者相同
+        为什么与的row_chunk 分开：
+            因为 bias 只影响选哪个专家（argmax 的比较），不影响最终输出的权重。举例：
+    */
+    float row_chunk_for_choice[VPT];   // 寄存器数组
     // Apply correction bias
     if (bias != nullptr) {
 #pragma unroll
@@ -471,11 +506,14 @@ __launch_bounds__(WARPS_PER_CTA* WARP_SIZE_PARAM) __global__
     float selected_sum = 0.f;
     for (int k_idx = 0; k_idx < k; ++k_idx)
     {
-        // First, each thread does the local argmax
-        float max_val_for_choice = row_chunk_for_choice[0];
+        // First, each thread does the local argmax 
+        // local argmax 
+        // 
+        float max_val_for_choice = row_chunk_for_choice[0]; // 初始化为第0个元素
         float max_val = row_chunk[0];
-        int expert = start_col;
+        int expert = start_col; // = first_elt_read_by_thread = thread_group_idx * 8
 #pragma unroll
+        // 以LDG_PER_THREAD=1, ELTS_PER_LDG=8 示例带入来看
         for (int ldg = 0, col = start_col; ldg < LDG_PER_THREAD; ++ldg, col += COLS_PER_GROUP_LDG)
         {
 #pragma unroll
@@ -498,6 +536,7 @@ __launch_bounds__(WARPS_PER_CTA* WARP_SIZE_PARAM) __global__
 // Now, we perform the argmax reduce. We use the butterfly pattern so threads reach consensus about the max.
 // This will be useful for K > 1 so that the threads can agree on "who" had the max value. That thread can
 // then blank out their max with -inf and the warp can run more iterations...
+// 线程组内通过 butterfly shuffle 进行 argmax reduce
 #pragma unroll
         for (int mask = THREADS_PER_ROW / 2; mask > 0; mask /= 2)
         {
@@ -506,6 +545,7 @@ __launch_bounds__(WARPS_PER_CTA* WARP_SIZE_PARAM) __global__
             int other_expert = VLLM_SHFL_XOR_SYNC_WIDTH(expert, mask, THREADS_PER_ROW);
 
             // We want lower indices to "win" in every thread so we break ties this way
+            // 并列时选较小 expert 编号(和 PyTorch argmax 一致)
             if (other_max_for_choice > max_val_for_choice || (other_max_for_choice == max_val_for_choice && other_expert < expert))
             {
                 max_val_for_choice = other_max_for_choice;
@@ -515,6 +555,7 @@ __launch_bounds__(WARPS_PER_CTA* WARP_SIZE_PARAM) __global__
         }
 
         // Write the max for this k iteration to global memory.
+        // ③ 线程组的 leader 写回结果
         if (thread_group_idx == 0)
         {
             // Add a guard to ignore experts not included by this node
@@ -533,6 +574,7 @@ __launch_bounds__(WARPS_PER_CTA* WARP_SIZE_PARAM) __global__
         }
 
         // Finally, we clear the value in the thread with the current max if there is another iteration to run.
+        // ④ 屏蔽已选中的 expert,准备下一轮
         if (k_idx + 1 < k)
         {
             const int ldg_group_for_expert = expert / COLS_PER_GROUP_LDG;
@@ -568,8 +610,10 @@ namespace detail
 template <int EXPERTS, int BYTES_PER_LDG, int WARP_SIZE_PARAM, typename InputType>
 struct TopkConstants
 {
+    // ELTS_PER_LDG 每次加载元素个数
     static constexpr int ELTS_PER_LDG = BYTES_PER_LDG / sizeof(InputType);
     static_assert(EXPERTS / (ELTS_PER_LDG * WARP_SIZE_PARAM) == 0 || EXPERTS % (ELTS_PER_LDG * WARP_SIZE_PARAM) == 0, "");
+    // VECs_PER_THREAD 每个线程处理的元素数量 (向量化加载数量 * 每行分配线程数量)
     static constexpr int VECs_PER_THREAD = MAX(1, EXPERTS / (ELTS_PER_LDG * WARP_SIZE_PARAM));
     static constexpr int VPT = VECs_PER_THREAD * ELTS_PER_LDG;
     static constexpr int THREADS_PER_ROW = EXPERTS / VPT;
@@ -699,6 +743,9 @@ void topkGatingKernelLauncher(
             TORCH_CHECK(workspace != nullptr,
                 "workspace must be provided for num_experts that are not a power of 2 or multiple of 64.");
             static constexpr int TPB = 256;
+            // moeSoftmax/moeSigmoid 内部会根据 num_experts 决定是否使用 workspace 进行分块计算，以支持任意专家数量
+            // grid: num_expert 个block, 每个block 处理一行
+            // block TPB =256 个线程
             if constexpr (SF == SCORING_SOFTMAX) {
               moeSoftmax<TPB, InputType><<<num_tokens, TPB, 0, stream>>>(
                 gating_output, nullptr, workspace, num_experts);

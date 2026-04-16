@@ -31,7 +31,7 @@ Multi-node:
 
 import argparse
 import os
-os.environ["VLLM_EXECUTE_MODEL_TIMEOUT_SECONDS"] = "36000"
+os.environ["VLLM_EXECUTE_MODEL_TIMEOUT_SECONDS"] = "72000"
 os.environ["CUDA_VISIBLE_DEVICES"] = "4,5,6,7"
 # os.environ["VLLM_ENABLE_V1_MULTIPROCESSING"] = "0"
 from time import sleep

@@ -1688,14 +1688,19 @@ class GPUModelRunner(
 
         # Get request indices.
         # E.g., [2, 5, 3] -> [0, 0, 1, 1, 1, 1, 1, 2, 2, 2]
+        # num_scheduled_tokens 表示已经在scheduler 中每个请求的token数量，例如 [2, 5, 3]，表示第一个请求有2个token被scheduler安排了，第二个请求有5个token被安排了，第三个请求有3个token被安排了。
+        # 那么req_indices 调用 np.repeat之后就会得到 [0, 0, 1, 1, 1, 1, 1, 2, 2, 2]，表示前两个token是第一个请求的，接下来的五个token是第二个请求的，最后三个token是第三个请求的。
         req_indices = np.repeat(self.arange_np[:num_reqs], num_scheduled_tokens)
 
         # cu_num_tokens: [2, 5, 3] -> [2, 7, 10]
-        # arange: [0, 1, 0, 1, 2, 3, 4, 0, 1, 2]
+        # arange: [0, 1, 0, 1, 2, 3, 4, 0, 1, 2] 为例 请求0 有2个token，在 scheduler中被安排了，所以前两个token的req_indices是0，接下来的五个token的req_indices是1，最后三个token的req_indices是2。
+        # 对于cu_num_tokens，表示每个请求的结束位置，例如第一个请求有2个token，所以第一个请求的结束位置是2；第二个请求有5个token，所以第二个请求的结束位置是2+5=7；第三个请求有3个token，所以第三个请求的结束位置是7+3=10。
+        # cu_num_tokens 用于计算每个请求的结束位置，arange 用于计算每个token在其对应请求中的位置。
         cu_num_tokens, arange = self._get_cumsum_and_arange(num_scheduled_tokens)
 
         # Get positions.
         positions_np = self.positions.np[:total_num_scheduled_tokens]
+        # 利用np.add 得到token绝对位置，直接把结果写进预分配的缓冲区，避免新分配的数组
         np.add(
             self.input_batch.num_computed_tokens_cpu[req_indices],
             arange,
@@ -1716,6 +1721,8 @@ class GPUModelRunner(
         # E.g., [0, 1, 0, 1, 2, 3, 4, 0, 1, 2]
         # -> [0, 1, M, M + 1, M + 2, M + 3, M + 4, 2 * M, 2 * M + 1, 2 * M + 2]
         # where M is the max_model_len.
+        # self.input_batch.token_ids_cpu has shape [num_reqs, max_model_len], 例如示例 [256, 4096]
+        # positions_np 表示这个token在该request序列的绝对位置， 叠加了就没个请求max_model_len的长度
         token_indices = (
             positions_np + req_indices * self.input_batch.token_ids_cpu.shape[1]
         )
