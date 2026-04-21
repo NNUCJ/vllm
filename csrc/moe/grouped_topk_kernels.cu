@@ -669,15 +669,33 @@ __global__ void grouped_topk_fused_kernel(
 #endif
 }
 
+/*
+模版参数解释：
+    T: 输入分数的数据类型，__nv_bfloat16（Deepseek-v3实例）
+    BiasT: bias的数据类型，__nv_bfloat16（Deepseek-v3实例） 
+    IdexT: 输出专家索引的数据类型，int32_t（Nemotron实例）
+    SF: 评分函数类型，SCORING_NONE 或 SCORING_SIGMOID
+    MaxNumExperts: 专家总数量的上限，256（NumDeepseekExperts实例）
+    UseGroups: 是否使用专家组，true
+    MaxNumTopExperts: 最终选 topk 个专家的上限，8（NumDeepseekExperts实例）
+*/
 template <typename T, typename BiasT, typename IdxT, ScoringFunc SF,
           int MaxNumExperts, bool UseGroups,
           int MaxNumTopExperts = DefaultMaxNumTopExperts>
 __global__ void grouped_topk_fused_small_expert_count_kernel(
-    T* scores, float* topkValues, IdxT* topkIndices, BiasT const* routingBias,
-    int64_t const numTokens, int64_t const numGroup, int64_t const topkGroup,
-    int64_t const topk, int64_t const numExperts,
-    int64_t const numExpertsPerGroup, bool const renormalize,
-    double const routedScalingFactor) {
+        T* scores,                          // 输入 raw 分数 [num_tokens, num_experts]
+        float* topkValues,                  // 输出 topk 分数 [num_tokens, topk] fp32
+        IdxT* topkIndices,                  // 输出 topk 专家索引 [num_tokens, topk] int32 
+        BiasT const* routingBias,           // 输入 bias [num_experts]，每个专家一个值
+        int64_t const numTokens,            // token 数量
+        int64_t const numGroup,             // 专家组数量
+        int64_t const topkGroup,            // 每组选 topkGroup 个专家 
+        int64_t const topk,                 // 最终选 topk 个专家
+        int64_t const numExperts,           // 专家总数量
+        int64_t const numExpertsPerGroup,   // 每组专家数=numExperts/numGroup
+        bool const renormalize,             // 是否归一化
+        double const routedScalingFactor    // 路由缩放因子
+      ) {
 #if (defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 900))
   cudaGridDependencySynchronize();
 #endif
@@ -692,10 +710,19 @@ __global__ void grouped_topk_fused_small_expert_count_kernel(
   // needed for warp reduce
   auto block = cg::this_thread_block();
   auto warp = cg::tiled_partition<WARP_SIZE>(block);
-
+  // 假设测试case 中batch 中有128 个token, expert 总数为256
+  //根据该算子调用时候，gradDim \ blockDim 的定义，128个token 需要使用128个block, 每个block中256个线程分别计算对应的expert score
+  // 那么一共就需要使用128 * 256 = 32768 个线程，恰好是一个block的最大线程数
+  // 256 个 thread， 正好是8个warp 
+  // theadIdx.x = [0,...255]
   // for the final reduction of weight norm, only some lanes need to participate
-  int32_t laneIdx = threadIdx.x % WARP_SIZE;
-  int32_t warpIdx = __shfl_sync(0xffffffff, threadIdx.x / WARP_SIZE, 0);
+  int32_t laneIdx = threadIdx.x % WARP_SIZE;   // lane index within a warp 对应组内expert [0...31]
+  // threadIdx.x / WARP_SIZE 表示了对应的warp id
+  /*
+  这里使用warp shfl_sync 指令 目的是编译器优化层面，如果直接使用threadIdx.x / WARP_SIZE 各自独立计算，可能会生成div 指令
+  __shfl_sync 是 warp 内寄存器通信指令，比整数除法更快（1 个 clock cycle），且明确告诉编译器"所有 lane 的值来自同一个源"，有助于后续代码消除分歧分析。
+  */
+  int32_t warpIdx = __shfl_sync(0xffffffff, threadIdx.x / WARP_SIZE, 0);   
 
   if constexpr (UseGroups) {
     if (warpIdx >= numGroup) {
@@ -712,20 +739,21 @@ __global__ void grouped_topk_fused_small_expert_count_kernel(
   bool expertSelected = threadExpert < numExperts;
   if constexpr (UseGroups) {
     threadExpert = warpIdx * numExpertsPerGroup + laneIdx;
-    expertSelected = laneIdx < numExpertsPerGroup;
+    expertSelected = laneIdx < numExpertsPerGroup;    // laneIdx ∈ [0,31]，每组32个expert → 恒为true
   }
-
-  auto scoreIdx = int64_t{blockIdx.x} * int64_t{numExperts} + threadExpert;
+  // 此处强转 int64_t 是为了防止 blockIdx.x 和 numExperts 的乘积超过 int32_t 的范围，导致溢出错误 
+  auto scoreIdx = int64_t{blockIdx.x} * int64_t{numExperts} + threadExpert;  // 计算当前线程负责的expert score在输入数组中的索引 
   auto biasVal = expertSelected ? static_cast<float>(routingBias[threadExpert])
                                 : invalidScoreFloat;
-  topkValues += blockIdx.x * topk;
-  topkIndices += blockIdx.x * topk;
+  topkValues += blockIdx.x * topk;  // 输出指针偏移到当前token的topk位置 
+  topkIndices += blockIdx.x * topk; // 输出指针偏移到当前token的topk位置 
 
   // get our assigned thread score; each warp represents one expert group
   float score =
       expertSelected ? static_cast<float>(scores[scoreIdx]) : invalidScoreFloat;
   auto scoreSigmoid = apply_scoring<SF>(score);
   // write the sigmoid score to shared for later use
+  // 写入share memory 中（sigmoid 分数）
   if (expertSelected) {
     smemScoreSigmoid[threadExpert] = scoreSigmoid;
   }
@@ -740,15 +768,22 @@ __global__ void grouped_topk_fused_small_expert_count_kernel(
   }
 
   // registers for top group score reduction
-  float topExpGroupScores[NumTopGroupScores];
-  [[maybe_unused]] int32_t topExpGroupIdx[NumTopGroupScores];
-  float topGroups[MaxNumTopGroups];  // bound of numGroup
-  int32_t topGroupIdx[MaxNumTopGroups];
-  float expertScoreGroup[MaxNumTopGroups];
-  int32_t expertIdxGroup[MaxNumTopGroups];
-  float topScores[MaxNumTopExperts];  // bound of topk
-  int32_t topExperts[MaxNumTopExperts];
-
+  // 默认 NumTopGroupScores 的值为2 
+  float topExpGroupScores[NumTopGroupScores];       // 每组 top-2 分数
+  [[maybe_unused]] int32_t topExpGroupIdx[NumTopGroupScores]; // 每组 top-2 分数对应的专家索引
+  /*
+  MaxNumTopGroups 表示选多少个expert group 进入最终的 expert topk 阶段
+  例如deepsee v3 中 256 个专家被分为了8组，每组32个专家，8个专家组中，选出其中的4个专家组 
+  那么每组选出2个专家进行下一轮的topk，
+  */
+  float topGroups[MaxNumTopGroups];  // bound of numGroup top-4 组的分数
+  int32_t topGroupIdx[MaxNumTopGroups]; // top-4 组的组号
+  float expertScoreGroup[MaxNumTopGroups];  // [4] 从选中组中提取的候选分数
+  int32_t expertIdxGroup[MaxNumTopGroups];  // [4] 对应的全局 expert 索引
+  float topScores[MaxNumTopExperts];  // [8] 最终 top-8 分数
+  int32_t topExperts[MaxNumTopExperts]; // [8] 最终 top-8 expert 索引
+  
+  // 组内top-2 reduction, 计算每组的 top-2 分数和对应的专家索引
   if constexpr (UseGroups) {
     reduce_topk::reduceTopK(warp, topExpGroupScores, topExpGroupIdx, scoreBias,
                             threadExpert,
@@ -757,61 +792,109 @@ __global__ void grouped_topk_fused_small_expert_count_kernel(
     // get the final group score and write it to shared
     if (warp.thread_rank() == 0) {
       auto groupScore = topExpGroupScores[0] + topExpGroupScores[1];
+      // warp 内线程0 写入 max1 + max2 作为组分数，参与后续的组间 topk 选择 
       smemGroupScores[warpIdx] = groupScore;
     }
   }
 
   // make group scores available to all warps
+  // 确保所有 8 组的分数都写入smemGroupScores
   __syncthreads();
 
   if constexpr (UseGroups) {
+    // 阶段二，选择TopK 组，此时只有warp 0（32个线程）参与，其余7个warp 在此阶段退出
     if (warpIdx == 0) {
       // a single warp performs the selection of top groups, and goes on to
       // select the final experts
+      // lane 0-7 各读取一个组的分数， lane 8 -31 读取无效分数（-inf） 
       float groupScore =
           laneIdx < numGroup ? smemGroupScores[laneIdx] : invalidScoreFloat;
-
+      // 从 8 个组中选择 top4 组 
       reduce_topk::reduceTopK(warp, topGroups, topGroupIdx, groupScore, laneIdx,
                               /* minValue */ invalidScoreFloat);
       // final expert selection: get relevant indexes and scores from shared
 #pragma unroll
+      // 从选中的专家组中选出全局的TopK专家， laneIdx 依次对应 top4 组中的专家索引
+      // 此时仍然只有warp0 工作，
       for (int ii = 0; ii < MaxNumTopGroups; ++ii) {  // bound of numGroup
         auto groupIdx = topGroupIdx[ii];
-        expertIdxGroup[ii] = groupIdx * numExpertsPerGroup + laneIdx;
-
+        expertIdxGroup[ii] = groupIdx * numExpertsPerGroup + laneIdx; // 每个lane 负责一个专家
+        // 从share memory 中读取
         expertScoreGroup[ii] = (ii < topkGroup) && expertSelected
                                    ? smemScoreBias[expertIdxGroup[ii]]
                                    : invalidScoreFloat;
       }
-
+      /*
+      例如deepseekv3 将会调用reduceTopK<8, float, 4>, 8表示一共需要选出 8个expert, 4 表示 8个来自其中的4个专家组
+      通过8 轮warp reduce 选出top-8 
+      */
       reduce_topk::reduceTopK(warp, topScores, topExperts, expertScoreGroup,
                               expertIdxGroup, /* minValue */ invalidScoreFloat,
                               topk);
     }
-  } else if constexpr (MaxNumExperts > MaxNumExpertsUnit) {
+  // 后续分支，不分组 UseGroups=false，并且专家数超过 128 的情况。 
+  } else if constexpr (MaxNumExperts > MaxNumExpertsUnit) {  
     // without groups, and the expert number is larger than MaxNumExpertsUnit,
     // we need to use multiple warps to calculate the intermediate topk results
-
-    int constexpr NumExpertWarps = (MaxNumExperts - 1) / MaxNumExpertsUnit + 1;
+    // 该分支可以 以num_expert=384, topk=8 的配置进行测试，验证多warp reduce的正确性 
+    /*
+       仍然是一个block 处理一个token 
+       blockdim = 384 , 一个线程处理一个expert,  384 / 32 = 12 个warp 
+    */
+    int constexpr NumExpertWarps = (MaxNumExperts - 1) / MaxNumExpertsUnit + 1;  // MaxNumExpertsUnit 128, ceil(384/128) = 3 个warp 参与计算, 表示前3个warp 做第一个阶段的top-K， 每个warp 负责128 个专家
+    // 中间候选总数 = 参与第一阶段的warp 数 * 每个warp 最终输出的 top-k 的数量
+    /*
+    例如上文中配置参数： NumExpertWarps =3, MaxNumTopExperts = 8 
+        warp 0 从 expert 0..127 选 top-8
+        warp 1 从 expert 128..255 选 top-8
+        warp 2 从 expert 256..383 选 top-8
+    */
     int constexpr NumInterTopK = NumExpertWarps * MaxNumTopExperts;
+    // 所以后续smemInterTopScores， smemInterTopExperts 需要保存24个中间结果，分别对应top-k 分数 以及 top-k 对应的expert idx 
+    // 其中 __attribute((aligned(128))) 表示让share memory 按照128 字节对齐，目前目的通常是改善 shared memory 访问效率，减少不必要的非对齐访问开销，也方便满足某些向量化/硬件访问对齐要求。
     __shared__ float
         __attribute((aligned(128))) smemInterTopScores[NumInterTopK];
     __shared__ int32_t
         __attribute((aligned(128))) smemInterTopExperts[NumInterTopK];
+    // 虽然一个block 中分配了12 个warp, 但是参与到第一阶段 top_k 计算的只有 warpIdx < NumExpertWarps
+    // 对应上述示例中 只有前3个warp
     if (warpIdx < NumExpertWarps) {
-      int offset = warpIdx * WARP_SIZE * MaxNumTopGroups;
+      int offset = warpIdx * WARP_SIZE * MaxNumTopGroups;  // 计算偏移。MaxNumTopGroups 默认为4
 #pragma unroll
       for (int ii = 0; ii < MaxNumTopGroups; ++ii) {
-        auto expertIdx = ii * WARP_SIZE + laneIdx;
+        /*
+          每个 lane 取 4 个 expert：
+          warp 0:
+          lane 0 取 expert 0, 32, 64, 96
+          lane 1 取 expert 1, 33, 65, 97
+          ...
+          lane 31 取 expert 31, 63, 95, 127
+        */
+        auto expertIdx = ii * WARP_SIZE + laneIdx; 
         expertIdxGroup[ii] = offset + expertIdx;
         expertScoreGroup[ii] = offset + expertIdx < numExperts
                                    ? smemScoreBias[offset + expertIdx]
                                    : invalidScoreFloat;
       }
+      //从当前 warp 负责的 128 个 expert 中选出 topk 个
+      /*
+        对于 topk=8：
+
+        warp 0 从 expert 0..127 选 top-8
+        warp 1 从 expert 128..255 选 top-8
+        warp 2 从 expert 256..383 选 top-8
+      */
       reduce_topk::reduceTopK(warp, topScores, topExperts, expertScoreGroup,
                               expertIdxGroup,
                               /* minValue */ invalidScoreFloat, topk);
+      // 第一阶段写入shared memory，供第二阶段使用 
+      /*
+        shared memory 里会保存 24 个中间候选：
 
+        smemInterTopScores[0..7]    = warp 0 的 top-8
+        smemInterTopScores[8..15]   = warp 1 的 top-8
+        smemInterTopScores[16..23]  = warp 2 的 top-8
+      */
       if (laneIdx < topk) {
         smemInterTopScores[warpIdx * MaxNumTopExperts + laneIdx] =
             topScores[laneIdx];
@@ -825,10 +908,18 @@ __global__ void grouped_topk_fused_small_expert_count_kernel(
       }
     }
     __syncthreads();
+    // 第二阶段： 从中间候选值里选出最终的topK
     if (warpIdx == 0) {
       int constexpr NumInterTopKPerThread = (NumInterTopK - 1) / WARP_SIZE + 1;
       float intermediateScore[NumInterTopKPerThread];
       int32_t intermediateExpert[NumInterTopKPerThread];
+      // 每个lane 最多读取中间一个候选
+      /*
+        lane 0 读中间候选 0
+        lane 1 读中间候选 1
+        ...
+        lane 23 读中间候选 23
+      */
       for (int i = laneIdx; i < NumInterTopKPerThread * WARP_SIZE;
            i += WARP_SIZE) {
         int ii = i / WARP_SIZE;
@@ -847,9 +938,23 @@ __global__ void grouped_topk_fused_small_expert_count_kernel(
   } else {
     // without groups, and the expert number is smaller than MaxNumExpertsUnit
     // each thread just takes `MaxNumTopGroups` experts
+    // 
     if (warpIdx == 0) {
+      // 不使用 group ,例如num_expert 为128 topk = 8, MaxNumTopGroups 默认为4 
 #pragma unroll
       for (int ii = 0; ii < MaxNumTopGroups; ++ii) {
+        // 每个lane 取哪些专家
+        /*
+          ii 从 0 到 3，laneIdx 是当前线程在 warp 内的编号，范围是 0 到 31。
+
+            所以每个 lane 会取 4 个 expert：
+
+            lane 0  -> expert 0, 32, 64, 96
+            lane 1  -> expert 1, 33, 65, 97
+            lane 2  -> expert 2, 34, 66, 98
+            ...
+            lane 31 -> expert 31, 63, 95, 127
+        */
         auto expertIdx = ii * WARP_SIZE + laneIdx;
         expertIdxGroup[ii] = expertIdx;
         expertScoreGroup[ii] = expertIdx < numExperts ? smemScoreBias[expertIdx]
@@ -860,7 +965,7 @@ __global__ void grouped_topk_fused_small_expert_count_kernel(
                               /* minValue */ invalidScoreFloat, topk);
     }
   }
-
+  // 写出最终的结果
   if (warpIdx == 0) {
     // determine our lane's expert index and write to output
     int32_t expertIdx =
@@ -868,11 +973,13 @@ __global__ void grouped_topk_fused_small_expert_count_kernel(
     float scoreNorm = laneIdx < topk ? smemScoreSigmoid[expertIdx] : 0.F;
     float finalScore = static_cast<float>(scoreNorm * routedScalingFactor);
     // norm the value
+    // renormalize: 除以 top-8 的 sigmoid 分数总和
     if (renormalize) {
       auto redNorm = cg::reduce(warp, scoreNorm, cg::plus<float>{});
       finalScore /= (redNorm + 1e-20);
     }
     // store the topk scores and experts to output
+    // 写出数据
     if (laneIdx < topk) {
       topkValues[laneIdx] = finalScore;
       topkIndices[laneIdx] = expertIdx;
@@ -884,13 +991,34 @@ __global__ void grouped_topk_fused_small_expert_count_kernel(
 #endif
 }
 
+/*
+invokeNoAuxTc()
+  ├─ is_multi_group == true  → grouped_topk_fused_small_expert_count_kernel
+  │   条件: n_group > 1, num_experts ≤ 256,
+  │          experts_per_group ≤ 32, topk ≤ 8, topk_group ≤ 4
+  │   ★ DeepSeek-V3 (256 experts, 8 groups) 走此路径
+  │
+  ├─ is_single_group == true → grouped_topk_fused_small_expert_count_kernel (UseGroups=false)
+  │   条件: n_group == 1, topk_group == 1, num_experts ≤ 512
+  │   适用: Nemotron (512 experts, topk=22), Kimi-K2 (384 experts)
+  │
+  └─ else → grouped_topk_fused_kernel (通用路径)
+      条件: 以上都不满足（超大专家数或超大 topk）
+*/
 template <typename T, typename BiasT, typename IdxT, ScoringFunc SF>
-void invokeNoAuxTc(T* scores, float* topk_values, IdxT* topk_indices,
-                   BiasT const* bias, int64_t const num_tokens,
-                   int64_t const num_experts, int64_t const n_group,
-                   int64_t const topk_group, int64_t const topk,
-                   bool const renormalize, double const routed_scaling_factor,
-                   bool enable_pdl = false, cudaStream_t const stream = 0) {
+void invokeNoAuxTc(T* scores,             // 输入分数  device pointer, shape [num_tokens, num_experts]
+                  float* topk_values,     // 输出权重， device pointer, shape [num_tokens, topk]
+                  IdxT* topk_indices,     // 输出专家索引， device pointer, shape [num_tokens, topk]
+                  BiasT const* bias,      // bias device pointer, shape [num_experts]
+                  int64_t const num_tokens, // 从 scores.shape[0] 推导
+                  int64_t const num_experts,  // 从 scores.shape[1] 推导
+                  int64_t const n_group,
+                  int64_t const topk_group,
+                  int64_t const topk,
+                  bool const renormalize,
+                  double const routed_scaling_factor,
+                  bool enable_pdl = false,
+                  cudaStream_t const stream = 0) {
   cudaLaunchConfig_t config;
   config.stream = stream;
   cudaLaunchAttribute attrs[1];
@@ -943,7 +1071,9 @@ void invokeNoAuxTc(T* scores, float* topk_values, IdxT* topk_indices,
         num_threads = MaxNumExpertsUnit;
       }
     }
+    // 一个 block 处理一个 token，block 内的线程负责处理所有专家（不分组）的 topk 选取
     config.gridDim = num_tokens;
+    // 每个线程处理一个专家的 score，线程数量不超过专家数量上限
     config.blockDim = num_threads;
     config.dynamicSmemBytes = 0;
     cudaLaunchKernelEx(&config, kernel_instance, scores, topk_values,
@@ -1002,9 +1132,16 @@ INSTANTIATE_NOAUX_TC(__nv_bfloat16, __nv_bfloat16, int32_t, SCORING_NONE);
 }  // namespace vllm
 
 std::tuple<torch::Tensor, torch::Tensor> grouped_topk(
-    torch::Tensor const& scores, int64_t n_group, int64_t topk_group,
-    int64_t topk, bool renormalize, double routed_scaling_factor,
-    torch::Tensor const& bias, int64_t scoring_func = 0) {
+    torch::Tensor const& scores,  // 输入 1： 路由分数 [num_tokens, num_experts]
+    int64_t n_group,              // 输入 2： 专家分组数
+    int64_t topk_group,           // 输入 3:  每个分组选几个专家参与最终 topk 选取
+    int64_t topk,                 // 输入 4:  每个token 选取的专家数量
+    bool renormalize,             // 是否对 top-k 权重归一化处理
+    double routed_scaling_factor, //  权重缩放因子
+    torch::Tensor const& bias,    // 专家路由 bias [num_experts]
+    int64_t scoring_func = 0      // 激活函数类型
+    ) 
+  {
   auto data_type = scores.scalar_type();
   auto bias_type = bias.scalar_type();
   auto input_size = scores.sizes();

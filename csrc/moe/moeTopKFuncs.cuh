@@ -155,11 +155,19 @@ __forceinline__ __device__ void reduceTopK(
   }
 };
 
+/*
+数组输入版本的warp 级 topk-K 规约函数
+每个lane 持有N 个候选值（value 和 idx），最终从整个warp 的N * 32个元素中选出top-k 
+*/
 template <int K, typename Type, int N, bool IsSorted = false>
 __device__ void reduceTopKFunc(cg::thread_block_tile<kWARP_SIZE> const& warp,
-                               Type (&out)[K], int32_t (&outIdx)[K],
-                               Type (&value)[N], int32_t (&idx)[N],
-                               Type minValue, int actualK = K) {
+                               Type (&out)[K],                // 输出: K个最大值及其索引
+                               int32_t (&outIdx)[K],
+                               Type (&value)[N],              // 输入：每lane 的N 个候选 
+                               int32_t (&idx)[N],
+                               Type minValue,                 // 哨兵值（通常 -INF）
+                               int actualK = K                // 实际需要的K (≤K)
+  ) {     
   static_assert(K > 0, "Top K must have K > 0");
   static_assert(K < kWARP_SIZE, "Top K must have K < kWARP_SIZE");
   static_assert(N > 0, "Top K must have N > 0");
@@ -168,34 +176,50 @@ __device__ void reduceTopKFunc(cg::thread_block_tile<kWARP_SIZE> const& warp,
   using RedType = TopKRedType<Type>;
   RedType topK[N];
 #pragma unroll
+  // 打包输入
   for (int nn = 0; nn < N; ++nn) {
-    topK[nn] = RedType{value[nn], idx[nn]};
+    topK[nn] = RedType{value[nn], idx[nn]};   // 每队 (value, idx) 打包成一个 RedType 结构，内部通过 makeCmpVal 转换成一个可比较的 compValIdx
   }
-
+  // Sort<N> 寄存器内排序网络
   if constexpr (!IsSorted) {
-    Sort<N, RedType>::run(topK);
+    Sort<N, RedType>::run(topK);  // 本地按打包值降序排列，即topK[0] 是本lane 当前的最大值
   }
   typename RedType::TypeCmp packedMax{};
 #pragma unroll
+  // 外层循环kk, 连续抽取 K 个最大值
   for (int kk = 0; kk < actualK; ++kk) {
+    // 下一轮reduce 前(kk 必须大于1)， 必须把上一轮选出的最大值，lane 的topk[0] 拿掉，否则会被重复选中
     bool update = kk > 0 && packedMax == topK[0].compValIdx;
 #pragma unroll
+    // 内层循环nn: 移除已选出的元素（左移）
     for (int nn = 0; nn < N; ++nn) {
+      /* 
+      非冠军 lane(update = false) topk[nn] 保持不变
+      冠军lane(update = True)，topk[0] <- topK[1], topk[1] <- topK[2], ...topk[N-1]= minvalue d
+      */
       topK[nn] = update && nn == N - 1 ? RedType{minValue, idx[nn]}
                  : update              ? topK[nn + 1]
                                        : topK[nn];
     }
     // get the next largest value
+    // topK[0].reduce 实际将会调用 cg::reduce(warp, compValIdx, cg::greater<TypeCmp>{}); 
     packedMax = topK[0].reduce(warp);
     RedType::unpack(out[kk], outIdx[kk], packedMax);
   }
 };
 
+// reduceTopK 的作用: 在一个warp内，把每个线程本地N 个候选（value 和 idx）进行规约，选出全 warp 范围内的最大 actualK 个值，并写入 out/outIdx
 template <int K, typename Type, int N>
 __forceinline__ __device__ void reduceTopK(
-    cg::thread_block_tile<kWARP_SIZE> const& warp, Type (&out)[K],
-    int32_t (&outIdx)[K], Type (&value)[N], int32_t (&idx)[N],
-    Type const minValue, int actualK = K) {
+    cg::thread_block_tile<kWARP_SIZE> const& warp,  // 一个cooperative groups 的 warp tile， 通常大小即为 KWARP_SIZE, 用于在一个warp 内进行并行规约、
+    Type (&out)[K],                                 // 输出数组，长度为K
+    int32_t (&outIdx)[K],                           // 输出的 top K 的值和对应的索引 
+    Type (&value)[N],                               // 输入数组，长度为N，包含了需要进行 top K 计算的候选值
+    int32_t (&idx)[N],                      // 输入数组，长度为N，包含了对应候选值的索引    
+    Type const minValue,               // 最小值，用于初始化 top K 的比较，通常设置为一个非常小的数，以确保任何候选值都能被正确比较和更新 
+    int actualK = K                     // 实际需要输出的 Topk 数量，默认为K，可以小于K以输出更少的结果
+  ) 
+  {
   static_assert(K > 0, "Top K must have K > 0");
   static_assert(K < kWARP_SIZE, "Top K must have K < kWARP_SIZE");
   static_assert(N > 0, "Top K must have N > 0");
@@ -211,7 +235,11 @@ __forceinline__ __device__ void reduceTopK(
     reduceTopKFunc<K, Type, N>(warp, out, outIdx, value, idx, minValue,
                                actualK);
   } else {
-    constexpr int numLoops = N / 4;
+    /*
+    每个 lane 的N 个候选被拆分成多个组，每个组4个。
+    N =16 时，每个 lane 有 16 个候选，拆成 4 轮，每轮处理 4 个。
+    */ 
+    constexpr int numLoops = N / 4; 
     constexpr int numResults = (numLoops * K - 1) / kWARP_SIZE + 1;
 
     Type topKBufferValue[numResults];
