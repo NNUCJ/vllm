@@ -1,0 +1,99 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 800">
+  <defs>
+    <style>
+      @font-face { font-family: "Inter"; src: local("sans-serif"); }
+      text { font-family: Inter, -apple-system, sans-serif; }
+    </style>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="10" markerHeight="7" orient="auto">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#2563eb"/>
+    </marker>
+    <filter id="shadow">
+      <feDropShadow dx="0" dy="2" stdDeviation="3" flood-opacity="0.1"/>
+    </filter>
+  </defs>
+
+  <!-- Background -->
+  <rect width="960" height="800" fill="#ffffff"/>
+
+  <!-- Title -->
+  <text x="480" y="30" text-anchor="middle" font-size="18" font-weight="600" fill="#111827">
+    dsv3_router_gemm Call Chain
+  </text>
+
+  <!-- Node 1: Python caller -->
+  <rect x="360" y="70" width="240" height="70" rx="8" fill="#dbeafe" stroke="#2563eb" stroke-width="2" filter="url(#shadow)"/>
+  <text x="480" y="95" text-anchor="middle" font-size="14" font-weight="600" fill="#1e3a8a">Python caller</text>
+  <text x="480" y="115" text-anchor="middle" font-size="11" fill="#64748b">vllm/model_executor/...</text>
+
+  <!-- Arrow 1->2 -->
+  <path d="M 480 140 L 480 175" stroke="#2563eb" stroke-width="2" fill="none" marker-end="url(#arrow)"/>
+  <rect x="440" y="150" width="80" height="18" fill="#ffffff" opacity="0.95"/>
+  <text x="480" y="162" text-anchor="middle" font-size="11" fill="#374151">torch.ops call</text>
+
+  <!-- Node 2: torch.ops dispatch -->
+  <rect x="360" y="175" width="240" height="70" rx="8" fill="#dbeafe" stroke="#2563eb" stroke-width="2" filter="url(#shadow)"/>
+  <text x="480" y="200" text-anchor="middle" font-size="14" font-weight="600" fill="#1e3a8a">torch.ops dispatch</text>
+  <text x="480" y="220" text-anchor="middle" font-size="11" fill="#64748b">torch.ops._moe_C...</text>
+
+  <!-- Arrow 2->3 -->
+  <path d="M 480 245 L 480 280" stroke="#2563eb" stroke-width="2" fill="none" marker-end="url(#arrow)"/>
+  <rect x="425" y="255" width="110" height="18" fill="#ffffff" opacity="0.95"/>
+  <text x="480" y="267" text-anchor="middle" font-size="11" fill="#374151">pybind dispatch</text>
+
+  <!-- Node 3: Op registration -->
+  <rect x="360" y="280" width="240" height="70" rx="8" fill="#fef3c7" stroke="#f59e0b" stroke-width="2" filter="url(#shadow)"/>
+  <text x="480" y="305" text-anchor="middle" font-size="14" font-weight="600" fill="#92400e">Op registration</text>
+  <text x="480" y="325" text-anchor="middle" font-size="11" fill="#64748b">csrc/moe/torch_bindings.cpp</text>
+
+  <!-- Arrow 3->4 -->
+  <path d="M 480 350 L 480 385" stroke="#2563eb" stroke-width="2" fill="none" marker-end="url(#arrow)"/>
+  <rect x="455" y="360" width="50" height="18" fill="#ffffff" opacity="0.95"/>
+  <text x="480" y="372" text-anchor="middle" font-size="11" fill="#374151">m.impl</text>
+
+  <!-- Node 4: C++ entry and checks -->
+  <rect x="360" y="385" width="240" height="70" rx="8" fill="#fef3c7" stroke="#f59e0b" stroke-width="2" filter="url(#shadow)"/>
+  <text x="480" y="410" text-anchor="middle" font-size="13" font-weight="600" fill="#92400e">C++ entry and checks</text>
+  <text x="480" y="430" text-anchor="middle" font-size="11" fill="#64748b">dsv3_router_gemm_entry.cu</text>
+
+  <!-- Branching arrows 4->5a and 4->5b -->
+  <path d="M 420 455 L 420 480 L 300 480 L 300 520" stroke="#059669" stroke-width="2" fill="none" marker-end="url(#arrow)"/>
+  <rect x="310" y="470" width="75" height="18" fill="#ffffff" opacity="0.95"/>
+  <text x="347" y="482" text-anchor="middle" font-size="11" fill="#374151">float32 out</text>
+
+  <path d="M 540 455 L 540 480 L 660 480 L 660 520" stroke="#7c3aed" stroke-width="2" fill="none" marker-end="url(#arrow)"/>
+  <rect x="620" y="470" width="60" height="18" fill="#ffffff" opacity="0.95"/>
+  <text x="650" y="482" text-anchor="middle" font-size="11" fill="#374151">bf16 out</text>
+
+  <!-- Node 5a: Launcher (float out) -->
+  <rect x="180" y="520" width="240" height="70" rx="8" fill="#d1fae5" stroke="#059669" stroke-width="2" filter="url(#shadow)"/>
+  <text x="300" y="545" text-anchor="middle" font-size="13" font-weight="600" fill="#065f46">Launcher (float out)</text>
+  <text x="300" y="565" text-anchor="middle" font-size="10" fill="#64748b">dsv3_router_gemm_float_out.cu</text>
+
+  <!-- Node 5b: Launcher (bf16 out) -->
+  <rect x="540" y="520" width="240" height="70" rx="8" fill="#e9d5ff" stroke="#7c3aed" stroke-width="2" filter="url(#shadow)"/>
+  <text x="660" y="545" text-anchor="middle" font-size="13" font-weight="600" fill="#5b21b6">Launcher (bf16 out)</text>
+  <text x="660" y="565" text-anchor="middle" font-size="10" fill="#64748b">dsv3_router_gemm_bf16_out.cu</text>
+
+  <!-- Merge arrows 5a->6 and 5b->6 -->
+  <path d="M 300 590 L 300 620 L 480 620 L 480 650" stroke="#059669" stroke-width="2" fill="none" marker-end="url(#arrow)"/>
+  <rect x="285" y="610" width="110" height="18" fill="#ffffff" opacity="0.95"/>
+  <text x="340" y="622" text-anchor="middle" font-size="11" fill="#374151">&lt;&lt;&lt;grid,block&gt;&gt;&gt;</text>
+
+  <path d="M 660 590 L 660 620 L 480 620 L 480 650" stroke="#7c3aed" stroke-width="2" fill="none" marker-end="url(#arrow)"/>
+  <rect x="565" y="610" width="110" height="18" fill="#ffffff" opacity="0.95"/>
+  <text x="620" y="622" text-anchor="middle" font-size="11" fill="#374151">&lt;&lt;&lt;grid,block&gt;&gt;&gt;</text>
+
+  <!-- Node 6: CUDA kernel -->
+  <rect x="360" y="650" width="240" height="70" rx="8" fill="#fecaca" stroke="#dc2626" stroke-width="2" filter="url(#shadow)"/>
+  <text x="480" y="675" text-anchor="middle" font-size="14" font-weight="600" fill="#991b1b">CUDA kernel</text>
+  <text x="480" y="695" text-anchor="middle" font-size="11" fill="#64748b">router_gemm_kernel_*</text>
+
+  <!-- Legend -->
+  <rect x="680" y="70" width="240" height="90" rx="6" fill="#f9fafb" stroke="#d1d5db" stroke-width="1"/>
+  <text x="800" y="90" text-anchor="middle" font-size="12" font-weight="600" fill="#374151">Legend</text>
+  <text x="690" y="110" font-size="11" fill="#6b7280">• Grid = N experts</text>
+  <text x="690" y="130" font-size="11" fill="#6b7280">• Block = 128 threads</text>
+  <text x="690" y="150" font-size="11" fill="#6b7280">• PDL on SM_90+</text>
+
+</svg>

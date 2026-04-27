@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 800" width="960" height="800">
+  <style>
+    text { font-family: "Helvetica Neue", Helvetica, Arial, sans-serif; }
+  </style>
+  <defs>
+    <marker id="arrow-blue" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#2563eb"/>
+    </marker>
+    <marker id="arrow-purple" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#9333ea"/>
+    </marker>
+  </defs>
+  <rect width="960" height="800" fill="#ffffff"/>
+  <text x="480" y="35" fill="#111827" font-size="18" font-weight="600" text-anchor="middle">Kernel Execution Phases</text>
+  <rect x="340" y="100" width="280" height="70" rx="8" fill="#eff6ff" stroke="#2563eb" stroke-width="1.5"/>
+  <text x="480" y="130" fill="#111827" font-size="14" font-weight="600" text-anchor="middle">Load B column</text>
+  <text x="480" y="150" fill="#6b7280" font-size="12" text-anchor="middle">uint4 load, 8 bf16</text>
+  <rect x="340" y="200" width="280" height="70" rx="8" fill="#eff6ff" stroke="#2563eb" stroke-width="1.5"/>
+  <text x="480" y="230" fill="#111827" font-size="14" font-weight="600" text-anchor="middle">BF16 to FP32</text>
+  <text x="480" y="250" fill="#6b7280" font-size="12" text-anchor="middle">bf16_uint4_to_float8</text>
+  <rect x="340" y="300" width="280" height="70" rx="8" fill="#eff6ff" stroke="#2563eb" stroke-width="1.5"/>
+  <text x="480" y="330" fill="#111827" font-size="14" font-weight="600" text-anchor="middle">Accumulate M rows</text>
+  <text x="480" y="350" fill="#6b7280" font-size="12" text-anchor="middle">acc[m] += a*b, M=1..16</text>
+  <rect x="340" y="400" width="280" height="70" rx="8" fill="#eff6ff" stroke="#2563eb" stroke-width="1.5"/>
+  <text x="480" y="430" fill="#111827" font-size="14" font-weight="600" text-anchor="middle">Loop K iterations</text>
+  <text x="480" y="450" fill="#6b7280" font-size="12" text-anchor="middle">7 iters, 1024 elems/iter</text>
+  <rect x="340" y="520" width="280" height="70" rx="8" fill="#eff6ff" stroke="#2563eb" stroke-width="1.5"/>
+  <text x="480" y="550" fill="#111827" font-size="14" font-weight="600" text-anchor="middle">Warp butterfly reduce</text>
+  <text x="480" y="570" fill="#6b7280" font-size="12" text-anchor="middle">shfl_xor 16,8,4,2,1</text>
+  <rect x="340" y="620" width="280" height="70" rx="8" fill="#eff6ff" stroke="#2563eb" stroke-width="1.5"/>
+  <text x="480" y="650" fill="#111827" font-size="14" font-weight="600" text-anchor="middle">Write warp sum</text>
+  <text x="480" y="670" fill="#6b7280" font-size="12" text-anchor="middle">laneId=0 to smem</text>
+  <rect x="670" y="200" width="220" height="50" rx="8" fill="#faf5ff" stroke="#9333ea" stroke-width="1.5"/>
+  <text x="780" y="230" fill="#111827" font-size="13" text-anchor="middle">__syncthreads()</text>
+  <rect x="670" y="280" width="220" height="50" rx="8" fill="#eff6ff" stroke="#2563eb" stroke-width="1.5"/>
+  <text x="780" y="310" fill="#111827" font-size="13" text-anchor="middle">Thread 0 sums 4 warps</text>
+  <rect x="670" y="360" width="220" height="50" rx="8" fill="#eff6ff" stroke="#2563eb" stroke-width="1.5"/>
+  <text x="780" y="390" fill="#111827" font-size="13" text-anchor="middle">Store out[m, n_idx]</text>
+  <line x1="480" y1="170" x2="480" y2="200" stroke="#2563eb" stroke-width="1.5" marker-end="url(#arrow-blue)"/>
+  <line x1="480" y1="270" x2="480" y2="300" stroke="#2563eb" stroke-width="1.5" marker-end="url(#arrow-blue)"/>
+  <line x1="480" y1="370" x2="480" y2="400" stroke="#2563eb" stroke-width="1.5" marker-end="url(#arrow-blue)"/>
+  <path d="M 340,435 L 280,435 L 280,135 L 340,135" stroke="#9333ea" stroke-width="1.5" stroke-dasharray="5,3" fill="none" marker-end="url(#arrow-purple)"/>
+  <rect x="235" y="280" width="50" height="18" fill="#ffffff" opacity="0.95"/>
+  <text x="260" y="292" fill="#9333ea" font-size="12" text-anchor="middle">K loop</text>
+  <line x1="480" y1="470" x2="480" y2="520" stroke="#2563eb" stroke-width="1.5" marker-end="url(#arrow-blue)"/>
+  <rect x="420" y="486" width="120" height="18" fill="#ffffff" opacity="0.95"/>
+  <text x="480" y="498" fill="#2563eb" font-size="12" text-anchor="middle">after K loop</text>
+  <line x1="480" y1="590" x2="480" y2="620" stroke="#2563eb" stroke-width="1.5" marker-end="url(#arrow-blue)"/>
+  <path d="M 620,655 L 650,655 L 650,225 L 670,225" stroke="#2563eb" stroke-width="1.5" fill="none" marker-end="url(#arrow-blue)"/>
+  <line x1="780" y1="250" x2="780" y2="280" stroke="#2563eb" stroke-width="1.5" marker-end="url(#arrow-blue)"/>
+  <line x1="780" y1="330" x2="780" y2="360" stroke="#2563eb" stroke-width="1.5" marker-end="url(#arrow-blue)"/>
+  <rect x="40" y="100" width="220" height="180" rx="8" fill="#f9fafb" stroke="#d1d5db" stroke-width="1.5"/>
+  <text x="150" y="125" fill="#111827" font-size="13" font-weight="600" text-anchor="middle">Per-thread config</text>
+  <text x="50" y="150" fill="#6b7280" font-size="12">VPT = 8</text>
+  <text x="50" y="170" fill="#6b7280" font-size="12">Per block: 4 warps</text>
+  <text x="50" y="190" fill="#6b7280" font-size="12">acc[]: FP32 regs</text>
+  <text x="50" y="210" fill="#6b7280" font-size="12">M = 1..16 tokens</text>
+  <text x="50" y="230" fill="#6b7280" font-size="12">K = 7168</text>
+  <text x="50" y="250" fill="#6b7280" font-size="12">k_elems/iter = 1024</text>
+  <text x="50" y="270" fill="#6b7280" font-size="12">k_iters = 7</text>
+</svg>

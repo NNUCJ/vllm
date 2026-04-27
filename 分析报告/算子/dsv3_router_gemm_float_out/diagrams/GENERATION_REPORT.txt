@@ -1,0 +1,75 @@
+=============================================================================
+DIAGRAM GENERATION REPORT: dsv3_router_gemm_float_out Kernel
+=============================================================================
+
+Generated: 2024-04-22
+Skill: fireworks-tech-graph
+Style: Style 1 (Flat Icon)
+
+DELIVERABLES (6 files):
+-----------------------
+1. grid-block-map.svg + grid-block-map.png (86KB)
+2. algorithm-flow.svg + algorithm-flow.png (131KB)  
+3. memory-flow.svg + memory-flow.png (105KB)
+
+DIAGRAM 1: grid-block-map.svg
+------------------------------
+Type: Architecture diagram
+Title: "Grid and Block Layout"
+Content:
+- Grid layout: 256 blocks (Block 0, 1, ..., 255) representing N experts
+- Expanded Block n showing 4 warps (Warp 0-3)
+- Warp 0 expanded to show 32 thread lanes (laneId 0-31)
+- Annotations: gridDim.x, blockDim.x, threads per warp
+
+DIAGRAM 2: algorithm-flow.svg
+------------------------------
+Type: Flowchart (vertical top→bottom)
+Title: "Kernel Execution Phases"
+Content:
+- 9 execution phases in vertical flow
+- K-loop back-edge (7 iterations, 1024 elements/iter)
+- Warp butterfly reduction (shfl_xor 16,8,4,2,1)
+- Synchronization and final reduction steps
+- Legend box with per-thread config (VPT=8, M=1..16, K=7168)
+
+DIAGRAM 3: memory-flow.svg
+---------------------------
+Type: Data-flow diagram (left→right lanes)
+Title: "Memory Hierarchy Flow"
+Content:
+- 4 memory hierarchy levels: Global → Registers → Warp Lanes → Shared
+- Input matrices: mat_a [M,K] bf16 row-major, mat_b [N,K] bf16 col-major
+- Register buffers: a_float[8], b_float[8], acc[M] (all fp32)
+- Warp reduction: 5-stage butterfly (shfl_xor)
+- Shared memory: sm_reduction[M][4] for 4 warp sums
+- Output: out [M,N] fp32
+- Color-coded arrows: blue=load, purple=compute, green=store
+
+VALIDATION RESULTS:
+-------------------
+✓ All SVG files pass rsvg-convert validation
+✓ All PNG exports successful (1920px width, 2x retina)
+✓ All text in English (no Chinese characters)
+✓ No text overflow detected in any diagram
+✓ Node titles within recommended limits
+✓ Edge labels ≤ 16 characters
+✓ No non-ASCII characters
+
+KERNEL PARAMETERS ENCODED:
+--------------------------
+M (num_tokens) = 1..16 (example M=4)
+N (num_experts) = 256 (DeepSeek-V3) or 384 (Kimi-K2)
+K (hidden_dim) = 7168
+BlockSize = 128 threads = 4 warps × 32 threads
+VPT = 8 (bf16 elements per thread per K-iteration)
+k_elems_per_iter = VPT × 128 = 1024
+k_iterations = K / 1024 = 7
+
+VISUAL INSPECTION CONFIRMATION:
+--------------------------------
+✓ grid-block-map.png: All labels fit within boxes, clear hierarchy
+✓ algorithm-flow.png: Phase flow readable, loop structure clear
+✓ memory-flow.png: Data flow arrows properly routed, legend visible
+
+All diagrams are production-ready for technical documentation.

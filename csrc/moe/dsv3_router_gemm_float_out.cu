@@ -45,6 +45,7 @@ __device__ __forceinline__ void bf16_uint4_to_float8(uint4 const& vec,
 
 #pragma unroll
   for (int i = 0; i < VPT; i++) {
+    // 使用 __bfloat162float 直接将 bf16 转换为 float，利用硬件加速的转换指令
     dst[i] = __bfloat162float(bf16_ptr[i]);
   }
 }
@@ -54,14 +55,15 @@ template <typename T, int kBlockSize, int VPT, int kNumTokens, int kNumExperts,
 __global__ __launch_bounds__(128, 1) void router_gemm_kernel_float_output(
     float* out, T const* mat_a, T const* mat_b) {
   // Each block handles one expert column
-  int const n_idx = blockIdx.x;
-  int const tid = threadIdx.x;
+  int const n_idx = blockIdx.x; // block 负责的专家列
+  int const tid = threadIdx.x;    
   constexpr int kWarpSize = 32;
+  // kBlockSize 默认128
   constexpr int kNumWarps = kBlockSize / kWarpSize;
   // Constants for this kernel
-  constexpr int k_elems_per_k_iteration = VPT * kBlockSize;
+  constexpr int k_elems_per_k_iteration = VPT * kBlockSize;  // 一个block 每次迭代处理的数据总量, 例如 8 * 128 = 1024个元素
   constexpr int k_iterations =
-      kHiddenDim / k_elems_per_k_iteration;  // Total K iterations
+      kHiddenDim / k_elems_per_k_iteration;  // Total K iterations，需要迭代的次数， 7168 / 1024 = 7
 
   // Initialize accumulators for all M rows
   float acc[kNumTokens] = {};
@@ -71,13 +73,13 @@ __global__ __launch_bounds__(128, 1) void router_gemm_kernel_float_output(
 
   // B matrix is in column-major order, so we can directly load a column for the
   // n_idx expert
-  T const* b_col = mat_b + n_idx * kHiddenDim;
+  T const* b_col = mat_b + n_idx * kHiddenDim;  // 这一专家 K 维的权重起点
 
   // Pre-compute k_base values for each iteration to help compiler optimize
   int k_bases[k_iterations];
 #pragma unroll
   for (int ki = 0; ki < k_iterations; ki++) {
-    k_bases[ki] = ki * k_elems_per_k_iteration + tid * VPT;
+    k_bases[ki] = ki * k_elems_per_k_iteration + tid * VPT; // 线程 tid 在第 ki 轮读的起始下标 ki * 1024 + tid * 8
   }
 
 #if (defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 900))
@@ -89,16 +91,31 @@ __global__ __launch_bounds__(128, 1) void router_gemm_kernel_float_output(
     int const k_base = k_bases[ki];
 
     // Load B matrix values using vector load (8 bf16 values)
+    // uint4 是 128 bits，正好装 8 个 bf16 值 (16 bits each)，对应一个线程需要处理的数量 VPT
+    /*
+
+      内存中的 bf16:
+        b_col[k_base + 0]  2 bytes
+        b_col[k_base + 1]  2 bytes
+        ...
+        b_col[k_base + 7]  2 bytes
+
+        一次 uint4 load:
+        [ bf16_0 | bf16_1 | bf16_2 | bf16_3 | bf16_4 | bf16_5 | bf16_6 | bf16_7 ]
+        共 16 bytes
+    */
     uint4 b_vec = *reinterpret_cast<uint4 const*>(b_col + k_base);
 
     // Convert B values to float
     float b_float[VPT];
+    // bf16_uint4_to_float8 函数作用把刚才去进来的128 bit 原始数据重新解释成 __nv_bfloat16[8]，然后逐个转成 float
     bf16_uint4_to_float8<VPT>(b_vec, b_float);
 
 // Process each token
 #pragma unroll
     for (int m_idx = 0; m_idx < kNumTokens; m_idx++) {
       // Load both rows of A matrix using vector loads
+      // 对mat_a 的一行做16 个字节向量化读取
       uint4 a_vec = *reinterpret_cast<uint4 const*>(
           mat_a + (m_idx * kHiddenDim) + k_base);
 
@@ -173,12 +190,12 @@ __global__ __launch_bounds__(128, 1) void router_gemm_kernel_float_output(
 template <typename T, int kNumTokens, int kNumExperts, int kHiddenDim>
 void invokeRouterGemmFloatOutput(float* output, T const* mat_a, T const* mat_b,
                                  cudaStream_t stream) {
-  constexpr int VPT = 16 / sizeof(T);
+  constexpr int VPT = 16 / sizeof(T); // 每个线程需要加载数据的数量，128/16=8个bf16值
   constexpr int kBlockSize = 128;
   cudaLaunchConfig_t config;
-  config.gridDim = kNumExperts;
-  config.blockDim = kBlockSize;
-  config.dynamicSmemBytes = 0;
+  config.gridDim = kNumExperts;     // 256 或者 384
+  config.blockDim = kBlockSize;     // 128
+  config.dynamicSmemBytes = 0;      // 静态 smem 
   config.stream = stream;
   cudaLaunchAttribute attrs[1];
   attrs[0].id = cudaLaunchAttributeProgrammaticStreamSerialization;
