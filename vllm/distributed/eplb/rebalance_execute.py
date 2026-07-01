@@ -198,12 +198,14 @@ def move_to_buffer(
         TransferMetadata: Metadata needed for completing remote weight transfers.
     """
     assert old_indices.shape == new_indices.shape
-    recv_primary_mask = np.zeros((num_local_experts,), dtype=np.bool_)
-    send_expert_ids = np.full((num_local_experts,), -1, dtype=np.int64)
-    send_src_rows = np.full((num_local_experts,), -1, dtype=np.int32)
-    recv_expert_ids = np.full((num_local_experts,), -1, dtype=np.int64)
-    recv_dst_rows = np.full((num_local_experts,), -1, dtype=np.int32)
+    #  ── ⓪ 预分配 5 张定长表（长度都是 num_local_experts, 每个rank 上的本地物理槽数，先填哨兵值），假设num_local_expert = 65（Qwen3.5-35B-A3B）
+    recv_primary_mask = np.zeros((num_local_experts,), dtype=np.bool_)  # 哪些本地行是「远端收来的主副本」
+    send_expert_ids = np.full((num_local_experts,), -1, dtype=np.int64)  # 本 rank 在 old 里持有的唯一专家 ID
+    send_src_rows = np.full((num_local_experts,), -1, dtype=np.int32)   # 上面每个专家在本地权重张量的源行号	
+    recv_expert_ids = np.full((num_local_experts,), -1, dtype=np.int64) # 本 rank 需要远端收的唯一专家 ID
+    recv_dst_rows = np.full((num_local_experts,), -1, dtype=np.int32)   # 上面每个专家落到缓冲的目标行号
 
+    # ── ① 从全局数组切出「本 rank 那一段」（物理槽按 rank 连续排布）
     base = ep_rank * num_local_experts
     local_rows = np.arange(num_local_experts, dtype=np.int32)
     local_global = base + local_rows
@@ -211,10 +213,11 @@ def move_to_buffer(
     old_local_expert_ids = old_indices[local_global]
     new_local_expert_ids = new_indices[local_global]
 
+    # ── ② 不变槽：old 和 new 落同一个专家的槽，啥也不用干
     # Unchanged mask
     is_unchanged = old_local_expert_ids == new_local_expert_ids
 
-    # Local receive eligibility
+    # Local receive eligibility # ── ③ 本地可满足：new 要的专家，本 rank 的 old 里已经有 → 不用走网络
     new_valid = new_local_expert_ids != -1
     can_recv_local = np.isin(
         new_local_expert_ids, old_local_expert_ids, assume_unique=False
@@ -224,6 +227,7 @@ def move_to_buffer(
     )
 
     # Send map: first src row per unique expert present locally in old mapping
+    # ── ④ 发送表：本 rank 在 old 里持有的每个「唯一」专家，记下它的首个源行
     send_count = 0
     valid_old = old_local_expert_ids != -1
     if np.any(valid_old):
@@ -236,12 +240,12 @@ def move_to_buffer(
         send_expert_ids[:send_count] = uniq_experts
         send_src_rows[:send_count] = src_rows
 
-    # Recv map: primary dst per unique expert needed remotely
+    # Recv map: primary dst per unique expert needed remotely ── ⑤ 接收表：new 要、但本地满足不了的专家，记下「主目标行」
     recv_count = 0
     need_recv_mask = np.logical_and(~is_received_locally, new_valid)
     if np.any(need_recv_mask):
         desired_experts = new_local_expert_ids[need_recv_mask]
-        desired_dsts = local_rows[need_recv_mask]
+        desired_dsts = local_rows[need_recv_mask] # local_rows 的作用在本rank 进行索引
         uniq_recv_experts, uniq_indices = np.unique(desired_experts, return_index=True)
         dst_rows = desired_dsts[uniq_indices]
         recv_count = int(uniq_recv_experts.shape[0])
@@ -269,15 +273,15 @@ def move_to_buffer(
     if send_count > 0:
         experts = send_expert_ids[:send_count]
         srcs = send_src_rows[:send_count]
-        order = np.argsort(experts, kind="stable")
+        order = np.argsort(experts, kind="stable")  # 对expert 升序排列后，返回其下标
         experts = experts[order]
         srcs = srcs[order]
 
         send_map, recv_map = get_ep_ranks_with_experts_batch(
             experts,
             num_local_experts,
-            old_indices,
-            new_indices,
+            old_indices,    # 注意此处传入的参数是全局的indices,扫 old_indices 找专家所在全局槽 
+            new_indices,    # 扫 new_indices 同理得 rank，再剔除 old 里已有副本的 rank
         )
 
         for expert, src in zip(experts.tolist(), srcs.tolist()):
