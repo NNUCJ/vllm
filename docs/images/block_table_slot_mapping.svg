@@ -1,0 +1,136 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 940 600" width="940" height="600" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Hiragino Sans GB','Microsoft YaHei',sans-serif">
+  <defs>
+    <marker id="m" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#475569"/>
+    </marker>
+    <marker id="mv" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#7c3aed"/>
+    </marker>
+    <marker id="mc" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#0891b2"/>
+    </marker>
+  </defs>
+  <rect width="940" height="600" fill="#ffffff"/>
+
+  <text x="470" y="30" font-size="17" font-weight="600" text-anchor="middle" fill="#0f172a">从 token 位置到物理槽位：block_table 与 slot_mapping</text>
+  <text x="470" y="50" font-size="12" text-anchor="middle" fill="#64748b">示例：block_size = 16，req 0 已算 5 个 token，本步 decode 第 6 个</text>
+
+  <!-- 三个 ID 空间 -->
+  <rect x="24" y="70" width="892" height="58" rx="8" fill="#f8fafc" stroke="#cbd5e1"/>
+  <g font-size="12" text-anchor="middle">
+    <rect x="44" y="84" width="176" height="30" rx="15" fill="#ede9fe" stroke="#7c3aed"/>
+    <text x="132" y="104" fill="#5b21b6">token position（逻辑位置）</text>
+    <text x="252" y="104" font-size="11" fill="#64748b">÷ block_size</text>
+    <rect x="308" y="84" width="176" height="30" rx="15" fill="#cffafe" stroke="#0891b2"/>
+    <text x="396" y="104" fill="#155e75">logical block index</text>
+    <text x="516" y="104" font-size="11" fill="#64748b">查 block_table</text>
+    <rect x="572" y="84" width="164" height="30" rx="15" fill="#d1fae5" stroke="#059669"/>
+    <text x="654" y="104" fill="#065f46">physical block id</text>
+    <text x="768" y="104" font-size="11" fill="#64748b">×bs + 余数</text>
+    <rect x="822" y="84" width="76" height="30" rx="15" fill="#fef3c7" stroke="#d97706"/>
+    <text x="860" y="104" fill="#78350f">slot id</text>
+  </g>
+  <g stroke="#94a3b8" stroke-width="1.3" fill="none">
+    <path d="M224 99 L302 99" marker-end="url(#m)"/>
+    <path d="M488 99 L566 99" marker-end="url(#m)"/>
+    <path d="M740 99 L818 99" marker-end="url(#m)"/>
+  </g>
+
+  <!-- positions -->
+  <text x="44" y="164" font-size="13" font-weight="600" fill="#5b21b6">positions（GPU 张量，本步 token 的绝对位置）</text>
+  <g font-size="12" text-anchor="middle">
+    <rect x="44" y="176" width="44" height="32" rx="5" fill="#ede9fe" stroke="#7c3aed"/><text x="66" y="197" fill="#0f172a">0</text>
+    <rect x="92" y="176" width="44" height="32" rx="5" fill="#ede9fe" stroke="#7c3aed"/><text x="114" y="197" fill="#0f172a">1</text>
+    <rect x="140" y="176" width="44" height="32" rx="5" fill="#ede9fe" stroke="#7c3aed"/><text x="162" y="197" fill="#0f172a">2</text>
+    <rect x="188" y="176" width="44" height="32" rx="5" fill="#ede9fe" stroke="#7c3aed"/><text x="210" y="197" fill="#0f172a">3</text>
+    <rect x="236" y="176" width="44" height="32" rx="5" fill="#ede9fe" stroke="#7c3aed"/><text x="258" y="197" fill="#0f172a">4</text>
+    <rect x="284" y="176" width="44" height="32" rx="5" fill="#ddd6fe" stroke="#7c3aed" stroke-width="2"/><text x="306" y="197" fill="#0f172a" font-weight="600">5</text>
+  </g>
+  <text x="344" y="197" font-size="11" fill="#64748b">← 本步新增的 decode token</text>
+
+  <!-- 计算 -->
+  <rect x="44" y="226" width="392" height="76" rx="7" fill="#f1f5f9" stroke="#94a3b8"/>
+  <text x="60" y="248" font-size="12" font-weight="600" fill="#0f172a">Triton kernel 内的两行计算</text>
+  <text x="60" y="270" font-size="12" fill="#0891b2" font-family="ui-monospace,Menlo,Consolas,monospace">block_numbers = block_table[req][pos // 16]</text>
+  <text x="60" y="290" font-size="12" fill="#d97706" font-family="ui-monospace,Menlo,Consolas,monospace">slot_ids = block_numbers * 16 + pos % 16</text>
+
+  <rect x="460" y="226" width="456" height="76" rx="7" fill="#fffbeb" stroke="#d97706"/>
+  <text x="476" y="248" font-size="12" font-weight="600" fill="#b45309">grid = (num_reqs + 1,)</text>
+  <text x="476" y="268" font-size="11" fill="#78350f">前 num_reqs 个 program：每个负责一个请求，按 query_start_loc 切区间</text>
+  <text x="476" y="288" font-size="11" fill="#78350f">最后 1 个 program：把 [num_tokens, max_num_batched_tokens) 填 −1</text>
+
+  <!-- block_table -->
+  <text x="44" y="340" font-size="13" font-weight="600" fill="#155e75">block_table（int32，跨 step 持久，CPU 写 → 分片 H2D）</text>
+  <g font-size="12" text-anchor="middle">
+    <text x="30" y="372" font-size="11" fill="#64748b" text-anchor="middle">行</text>
+    <text x="30" y="398" font-size="11" fill="#0891b2" text-anchor="middle">0</text>
+    <text x="30" y="430" font-size="11" fill="#94a3b8" text-anchor="middle">1</text>
+
+    <text x="80" y="372" font-size="10" fill="#64748b">列 0</text>
+    <text x="140" y="372" font-size="10" fill="#64748b">列 1</text>
+    <text x="200" y="372" font-size="10" fill="#64748b">列 2</text>
+    <text x="260" y="372" font-size="10" fill="#64748b">列 3</text>
+
+    <rect x="50" y="382" width="60" height="30" rx="4" fill="#cffafe" stroke="#0891b2" stroke-width="2"/><text x="80" y="402" fill="#0f172a" font-weight="600">1</text>
+    <rect x="110" y="382" width="60" height="30" rx="4" fill="#f1f5f9" stroke="#cbd5e1"/><text x="140" y="402" fill="#94a3b8">0</text>
+    <rect x="170" y="382" width="60" height="30" rx="4" fill="#f1f5f9" stroke="#cbd5e1"/><text x="200" y="402" fill="#94a3b8">0</text>
+    <rect x="230" y="382" width="60" height="30" rx="4" fill="#f1f5f9" stroke="#cbd5e1"/><text x="260" y="402" fill="#94a3b8">0</text>
+
+    <rect x="50" y="414" width="60" height="30" rx="4" fill="#f8fafc" stroke="#e2e8f0"/><text x="80" y="434" fill="#cbd5e1">…</text>
+    <rect x="110" y="414" width="60" height="30" rx="4" fill="#f8fafc" stroke="#e2e8f0"/><text x="140" y="434" fill="#cbd5e1">…</text>
+    <rect x="170" y="414" width="60" height="30" rx="4" fill="#f8fafc" stroke="#e2e8f0"/><text x="200" y="434" fill="#cbd5e1">…</text>
+    <rect x="230" y="414" width="60" height="30" rx="4" fill="#f8fafc" stroke="#e2e8f0"/><text x="260" y="434" fill="#cbd5e1">…</text>
+  </g>
+  <text x="306" y="402" font-size="11" fill="#0891b2" text-anchor="start">num_blocks_per_row[0] = 1</text>
+  <text x="306" y="418" font-size="10.5" fill="#64748b" text-anchor="start">append_row 的写入游标，只写新增的几列</text>
+  <text x="306" y="438" font-size="10.5" fill="#dc2626" text-anchor="start">行下标是 req_index（batch 位置），不是 request id</text>
+
+  <!-- slot_mapping -->
+  <text x="44" y="486" font-size="13" font-weight="600" fill="#6d28d9">slot_mapping（int64，每 step 重算）</text>
+  <g font-size="12" text-anchor="middle">
+    <rect x="50" y="496" width="52" height="30" rx="4" fill="#ede9fe" stroke="#7c3aed"/><text x="76" y="516" fill="#0f172a">16</text>
+    <rect x="106" y="496" width="52" height="30" rx="4" fill="#ede9fe" stroke="#7c3aed"/><text x="132" y="516" fill="#0f172a">17</text>
+    <rect x="162" y="496" width="52" height="30" rx="4" fill="#ede9fe" stroke="#7c3aed"/><text x="188" y="516" fill="#0f172a">18</text>
+    <rect x="218" y="496" width="52" height="30" rx="4" fill="#ede9fe" stroke="#7c3aed"/><text x="244" y="516" fill="#0f172a">19</text>
+    <rect x="274" y="496" width="52" height="30" rx="4" fill="#ede9fe" stroke="#7c3aed"/><text x="300" y="516" fill="#0f172a">20</text>
+    <rect x="330" y="496" width="52" height="30" rx="4" fill="#ddd6fe" stroke="#7c3aed" stroke-width="2"/><text x="356" y="516" fill="#0f172a" font-weight="600">21</text>
+    <rect x="386" y="496" width="52" height="30" rx="4" fill="#f1f5f9" stroke="#cbd5e1"/><text x="412" y="516" fill="#94a3b8">−1</text>
+    <rect x="442" y="496" width="52" height="30" rx="4" fill="#f1f5f9" stroke="#cbd5e1"/><text x="468" y="516" fill="#94a3b8">−1</text>
+  </g>
+  <text x="506" y="516" font-size="11" fill="#64748b" text-anchor="start">PAD_SLOT_ID，写 kernel 见负数直接 return</text>
+
+  <!-- 物理显存 -->
+  <rect x="536" y="330" width="380" height="150" rx="8" fill="#f0fdf4" stroke="#059669" stroke-width="1.6"/>
+  <text x="726" y="352" font-size="13" font-weight="600" text-anchor="middle" fill="#047857">KV cache 显存（某一层）</text>
+  <text x="726" y="369" font-size="11" text-anchor="middle" fill="#64748b">[2, num_blocks, 16, num_kv_heads, head_size]</text>
+
+  <g font-size="10" text-anchor="middle">
+    <rect x="556" y="382" width="76" height="42" rx="5" fill="#ffffff" stroke="#94a3b8"/>
+    <text x="594" y="399" font-size="11" fill="#334155">block 0</text><text x="594" y="414" fill="#94a3b8">slot 0..15</text>
+
+    <rect x="640" y="382" width="76" height="42" rx="5" fill="#d1fae5" stroke="#059669" stroke-width="2"/>
+    <text x="678" y="399" font-size="11" font-weight="600" fill="#065f46">block 1</text><text x="678" y="414" fill="#047857">slot 16..31</text>
+
+    <rect x="724" y="382" width="76" height="42" rx="5" fill="#ffffff" stroke="#94a3b8"/>
+    <text x="762" y="399" font-size="11" fill="#334155">block 2</text><text x="762" y="414" fill="#94a3b8">slot 32..47</text>
+
+    <rect x="808" y="382" width="76" height="42" rx="5" fill="#ffffff" stroke="#94a3b8"/>
+    <text x="846" y="399" font-size="11" fill="#334155">block 3</text><text x="846" y="414" fill="#94a3b8">slot 48..63</text>
+  </g>
+  <text x="726" y="447" font-size="11" text-anchor="middle" fill="#065f46">block id = 第 1 维下标　　slot id = 第 1、2 维展平后的下标</text>
+  <text x="726" y="466" font-size="11" text-anchor="middle" fill="#475569">物理上分块散布，靠 block_table 拼成逻辑连续的序列</text>
+
+  <!-- 连线 -->
+  <path d="M80 382 L80 366 L520 366 L520 350 L552 350" fill="none" stroke="#0891b2" stroke-width="1.6" stroke-dasharray="5 3" marker-end="url(#mc)"/>
+  <text x="300" y="360" font-size="10.5" fill="#0891b2">block id = 1 → 定位物理块</text>
+
+  <path d="M678 428 L678 470 L520 470 L520 511 L498 511" fill="none" stroke="#7c3aed" stroke-width="1.6" stroke-dasharray="5 3" marker-end="url(#mv)"/>
+  <text x="560" y="486" font-size="10.5" fill="#7c3aed">1×16 + 0..5 = 16..21</text>
+
+  <!-- 底部对照 -->
+  <rect x="24" y="540" width="892" height="46" rx="7" fill="#f8fafc" stroke="#cbd5e1"/>
+  <text x="44" y="560" font-size="11.5" fill="#0891b2">■ block_table → 读路径：传给 flash_attn_varlen_func(block_table=…) 做分页读</text>
+  <text x="44" y="578" font-size="11.5" fill="#7c3aed">■ slot_mapping → 写路径：传给 reshape_and_cache_flash(slot_mapping) 做 scatter 写</text>
+  <text x="640" y="560" font-size="11" fill="#64748b">两者由同一张表推导</text>
+  <text x="640" y="578" font-size="11" fill="#64748b">但被传给不同的 kernel</text>
+</svg>

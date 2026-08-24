@@ -1,0 +1,107 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 940 520" width="940" height="520" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Hiragino Sans GB','Microsoft YaHei',sans-serif">
+  <defs>
+    <marker id="u" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#475569"/>
+    </marker>
+    <marker id="ug" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#059669"/>
+    </marker>
+    <marker id="ur" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#dc2626"/>
+    </marker>
+  </defs>
+  <rect width="940" height="520" fill="#ffffff"/>
+  <text x="470" y="30" font-size="17" font-weight="600" text-anchor="middle" fill="#0f172a">推理过程中 block_table 的两种写入方式</text>
+  <text x="470" y="50" font-size="12" text-anchor="middle" fill="#64748b">唯一差别：num_blocks_per_row 这个写入游标是否归零</text>
+
+  <!-- append_row -->
+  <rect x="24" y="72" width="440" height="212" rx="9" fill="#f0fdf4" stroke="#059669" stroke-width="1.6"/>
+  <text x="44" y="96" font-size="14" font-weight="600" fill="#047857">append_row(new_block_ids, req_index)</text>
+  <text x="44" y="115" font-size="11.5" fill="#475569">场景：已有请求追加块（decode / 后续 chunk）</text>
+  <text x="44" y="132" font-size="11" fill="#64748b">调用点：GPUModelRunner._update_states()</text>
+
+  <text x="44" y="158" font-size="11" fill="#64748b">写入前　num_blocks_per_row[0] = 2</text>
+  <g font-size="12" text-anchor="middle">
+    <rect x="44" y="166" width="56" height="28" rx="4" fill="#d1fae5" stroke="#059669"/><text x="72" y="185" fill="#0f172a">7</text>
+    <rect x="104" y="166" width="56" height="28" rx="4" fill="#d1fae5" stroke="#059669"/><text x="132" y="185" fill="#0f172a">3</text>
+    <rect x="164" y="166" width="56" height="28" rx="4" fill="#f1f5f9" stroke="#cbd5e1"/><text x="192" y="185" fill="#94a3b8">0</text>
+    <rect x="224" y="166" width="56" height="28" rx="4" fill="#f1f5f9" stroke="#cbd5e1"/><text x="252" y="185" fill="#94a3b8">0</text>
+  </g>
+  <path d="M192 200 L192 212" stroke="#059669" stroke-width="1.6" marker-end="url(#ug)"/>
+  <text x="300" y="186" font-size="10.5" fill="#059669" text-anchor="start">start = 游标 = 2</text>
+  <text x="300" y="202" font-size="10.5" fill="#64748b" text-anchor="start">只写 [2, 2+n)</text>
+
+  <text x="44" y="232" font-size="11" fill="#64748b">写入后　num_blocks_per_row[0] = 3</text>
+  <g font-size="12" text-anchor="middle">
+    <rect x="44" y="240" width="56" height="28" rx="4" fill="#d1fae5" stroke="#059669"/><text x="72" y="259" fill="#0f172a">7</text>
+    <rect x="104" y="240" width="56" height="28" rx="4" fill="#d1fae5" stroke="#059669"/><text x="132" y="259" fill="#0f172a">3</text>
+    <rect x="164" y="240" width="56" height="28" rx="4" fill="#6ee7b7" stroke="#059669" stroke-width="2"/><text x="192" y="259" fill="#065f46" font-weight="600">9</text>
+    <rect x="224" y="240" width="56" height="28" rx="4" fill="#f1f5f9" stroke="#cbd5e1"/><text x="252" y="259" fill="#94a3b8">0</text>
+  </g>
+  <text x="300" y="252" font-size="10.5" fill="#059669" text-anchor="start">旧内容原样保留</text>
+  <text x="300" y="268" font-size="10.5" fill="#64748b" text-anchor="start">O(新增块数)</text>
+
+  <!-- add_row -->
+  <rect x="484" y="72" width="432" height="212" rx="9" fill="#fef2f2" stroke="#dc2626" stroke-width="1.6"/>
+  <text x="504" y="96" font-size="14" font-weight="600" fill="#b91c1c">add_row(block_ids, req_index)</text>
+  <text x="504" y="115" font-size="11.5" fill="#475569">场景：新请求进入 batch / 抢占后恢复</text>
+  <text x="504" y="132" font-size="11" fill="#64748b">调用点：InputBatch.add_request()</text>
+
+  <text x="504" y="158" font-size="11" fill="#64748b">写入前　num_blocks_per_row[0] = 2（旧块已还池）</text>
+  <g font-size="12" text-anchor="middle">
+    <rect x="504" y="166" width="56" height="28" rx="4" fill="#e2e8f0" stroke="#94a3b8" stroke-dasharray="4 3"/><text x="532" y="185" fill="#94a3b8">7</text>
+    <rect x="564" y="166" width="56" height="28" rx="4" fill="#e2e8f0" stroke="#94a3b8" stroke-dasharray="4 3"/><text x="592" y="185" fill="#94a3b8">3</text>
+    <rect x="624" y="166" width="56" height="28" rx="4" fill="#f1f5f9" stroke="#cbd5e1"/><text x="652" y="185" fill="#94a3b8">0</text>
+    <rect x="684" y="166" width="56" height="28" rx="4" fill="#f1f5f9" stroke="#cbd5e1"/><text x="712" y="185" fill="#94a3b8">0</text>
+  </g>
+  <text x="760" y="180" font-size="10.5" fill="#dc2626" text-anchor="start">游标先归零</text>
+  <text x="760" y="196" font-size="10.5" fill="#64748b" text-anchor="start">start = 0</text>
+
+  <text x="504" y="232" font-size="11" fill="#64748b">写入后　num_blocks_per_row[0] = 3</text>
+  <g font-size="12" text-anchor="middle">
+    <rect x="504" y="240" width="56" height="28" rx="4" fill="#fecaca" stroke="#dc2626" stroke-width="2"/><text x="532" y="259" fill="#7f1d1d" font-weight="600">12</text>
+    <rect x="564" y="240" width="56" height="28" rx="4" fill="#fecaca" stroke="#dc2626" stroke-width="2"/><text x="592" y="259" fill="#7f1d1d" font-weight="600">5</text>
+    <rect x="624" y="240" width="56" height="28" rx="4" fill="#fecaca" stroke="#dc2626" stroke-width="2"/><text x="652" y="259" fill="#7f1d1d" font-weight="600">20</text>
+    <rect x="684" y="240" width="56" height="28" rx="4" fill="#f1f5f9" stroke="#cbd5e1"/><text x="712" y="259" fill="#94a3b8">0</text>
+  </g>
+  <text x="760" y="252" font-size="10.5" fill="#dc2626" text-anchor="start">整行被全新 block id 覆盖</text>
+  <text x="760" y="268" font-size="10.5" fill="#64748b" text-anchor="start">抢占后 id 全换了一批</text>
+
+  <!-- 时序 -->
+  <rect x="24" y="304" width="892" height="196" rx="9" fill="#f8fafc" stroke="#94a3b8" stroke-width="1.4"/>
+  <text x="44" y="328" font-size="14" font-weight="600" fill="#0f172a">一步之内的完整时序</text>
+
+  <g font-size="11.5" text-anchor="middle">
+    <rect x="44" y="344" width="150" height="42" rx="6" fill="#eff6ff" stroke="#2563eb"/>
+    <text x="119" y="363" fill="#1d4ed8" font-weight="600">Scheduler</text>
+    <text x="119" y="378" font-size="10" fill="#64748b">allocate_slots()</text>
+
+    <rect x="222" y="344" width="150" height="42" rx="6" fill="#eff6ff" stroke="#2563eb"/>
+    <text x="297" y="363" fill="#1d4ed8" font-weight="600">BlockPool</text>
+    <text x="297" y="378" font-size="10" fill="#64748b">get_new_blocks / touch</text>
+
+    <rect x="400" y="344" width="164" height="42" rx="6" fill="#eff6ff" stroke="#2563eb"/>
+    <text x="482" y="363" fill="#1d4ed8" font-weight="600">get_block_ids()</text>
+    <text x="482" y="378" font-size="10" fill="#64748b">对象 → tuple[list[int], …]</text>
+
+    <rect x="592" y="344" width="150" height="42" rx="6" fill="#f0fdf4" stroke="#059669"/>
+    <text x="667" y="363" fill="#047857" font-weight="600">add / append_row</text>
+    <text x="667" y="378" font-size="10" fill="#64748b">只写 CPU numpy</text>
+
+    <rect x="770" y="344" width="146" height="42" rx="6" fill="#f0fdf4" stroke="#059669"/>
+    <text x="843" y="363" fill="#047857" font-weight="600">commit_block_table</text>
+    <text x="843" y="378" font-size="10" fill="#64748b">前 num_reqs 行 H2D</text>
+  </g>
+  <g stroke="#64748b" stroke-width="1.4" fill="none">
+    <path d="M198 365 L218 365" marker-end="url(#u)"/>
+    <path d="M376 365 L396 365" marker-end="url(#u)"/>
+    <path d="M568 365 L588 365" marker-end="url(#u)"/>
+    <path d="M746 365 L766 365" marker-end="url(#u)"/>
+  </g>
+
+  <line x1="44" y1="404" x2="896" y2="404" stroke="#e2e8f0"/>
+  <text x="44" y="426" font-size="11.5" fill="#475569">· tuple 的外层下标就是 KV cache group id —— 混合模型每次返回多个 list，MultiGroupBlockTable 按 gid 分发</text>
+  <text x="44" y="448" font-size="11.5" fill="#475569">· commit_block_table 在 _prepare_inputs 最开头调用，让 H2D 拷贝与后续 CPU 端计算重叠（源码注释明确说明）</text>
+  <text x="44" y="470" font-size="11.5" fill="#475569">· 只拷前 num_reqs 行 ⇒ 行的顺序必须与 input_batch 的紧凑排布严格一致，重排要用 move_row / swap_row</text>
+  <text x="44" y="492" font-size="11.5" fill="#dc2626">· 抢占恢复必须走 add_row：旧块已经归还给 BlockPool，继续 append 会把新旧 block id 混在一行里</text>
+</svg>

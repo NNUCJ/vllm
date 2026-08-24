@@ -1,0 +1,111 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 940 560" width="940" height="560" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Hiragino Sans GB','Microsoft YaHei',sans-serif">
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#475569"/>
+    </marker>
+    <marker id="ab" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#2563eb"/>
+    </marker>
+  </defs>
+
+  <rect width="940" height="560" fill="#ffffff"/>
+
+  <!-- 逻辑层 -->
+  <rect x="24" y="56" width="404" height="472" rx="10" fill="#f1f5f9" stroke="#94a3b8" stroke-width="1.5"/>
+  <text x="42" y="82" font-size="16" font-weight="600" fill="#0f172a">逻辑层 · engine core 进程（纯 CPU）</text>
+  <text x="42" y="102" font-size="12" fill="#64748b">产物：list[KVCacheBlock]（Python 对象）</text>
+
+  <rect x="52" y="120" width="348" height="46" rx="7" fill="#ffffff" stroke="#64748b" stroke-width="1.4"/>
+  <text x="226" y="142" font-size="14" font-weight="600" text-anchor="middle" fill="#0f172a">Scheduler</text>
+  <text x="226" y="159" font-size="11" text-anchor="middle" fill="#64748b">决定本步跑哪些请求 / 每个请求跑多少 token</text>
+
+  <rect x="52" y="186" width="348" height="46" rx="7" fill="#ffffff" stroke="#64748b" stroke-width="1.4"/>
+  <text x="226" y="208" font-size="14" font-weight="600" text-anchor="middle" fill="#0f172a">KVCacheManager</text>
+  <text x="226" y="225" font-size="11" text-anchor="middle" fill="#64748b">allocate_slots / free / get_computed_blocks</text>
+
+  <rect x="52" y="252" width="348" height="46" rx="7" fill="#ffffff" stroke="#64748b" stroke-width="1.4"/>
+  <text x="226" y="274" font-size="14" font-weight="600" text-anchor="middle" fill="#0f172a">KVCacheCoordinator</text>
+  <text x="226" y="291" font-size="11" text-anchor="middle" fill="#64748b">跨 group 协调 · 每 group 一个 SingleTypeManager</text>
+
+  <rect x="52" y="318" width="348" height="188" rx="7" fill="#ffffff" stroke="#2563eb" stroke-width="1.8"/>
+  <text x="226" y="340" font-size="14" font-weight="600" text-anchor="middle" fill="#1d4ed8">BlockPool（唯一的物理块所有者）</text>
+  <text x="226" y="357" font-size="11" text-anchor="middle" fill="#64748b">blocks[i].block_id == i == 物理块下标</text>
+
+  <g font-size="12" text-anchor="middle">
+    <rect x="70" y="372" width="52" height="36" rx="5" fill="#dbeafe" stroke="#2563eb"/>
+    <text x="96" y="390" fill="#1e3a8a">blk 0</text><text x="96" y="403" font-size="9" fill="#1d4ed8">null</text>
+    <rect x="132" y="372" width="52" height="36" rx="5" fill="#fee2e2" stroke="#dc2626"/>
+    <text x="158" y="390" fill="#7f1d1d">blk 1</text><text x="158" y="403" font-size="9" fill="#b91c1c">ref=1</text>
+    <rect x="194" y="372" width="52" height="36" rx="5" fill="#fef3c7" stroke="#d97706"/>
+    <text x="220" y="390" fill="#78350f">blk 2</text><text x="220" y="403" font-size="9" fill="#b45309">cached</text>
+    <rect x="256" y="372" width="52" height="36" rx="5" fill="#f1f5f9" stroke="#94a3b8"/>
+    <text x="282" y="390" fill="#334155">blk 3</text><text x="282" y="403" font-size="9" fill="#64748b">free</text>
+    <rect x="318" y="372" width="52" height="36" rx="5" fill="#f1f5f9" stroke="#94a3b8"/>
+    <text x="344" y="390" fill="#334155">blk 4</text><text x="344" y="403" font-size="9" fill="#64748b">free</text>
+  </g>
+
+  <text x="70" y="432" font-size="11" fill="#475569">FreeKVCacheBlockQueue：空闲 + 可驱逐共用一条双向链表</text>
+  <line x1="70" y1="442" x2="382" y2="442" stroke="#cbd5e1" stroke-width="1"/>
+  <g font-size="11">
+    <circle cx="80" cy="460" r="4" fill="#dc2626"/><text x="92" y="464" fill="#475569">ref_cnt &gt; 0 → in use（不在队列里）</text>
+    <circle cx="80" cy="480" r="4" fill="#d97706"/><text x="92" y="484" fill="#475569">ref_cnt = 0 且有 hash → evictable（队尾）</text>
+    <circle cx="80" cy="500" r="4" fill="#94a3b8"/><text x="92" y="504" fill="#475569">ref_cnt = 0 且无 hash → free（队首，优先牺牲）</text>
+  </g>
+
+  <!-- 物理层 -->
+  <rect x="512" y="56" width="404" height="472" rx="10" fill="#f8fafc" stroke="#94a3b8" stroke-width="1.5"/>
+  <text x="530" y="82" font-size="16" font-weight="600" fill="#0f172a">物理层 · worker 进程</text>
+  <text x="530" y="102" font-size="12" fill="#64748b">产物：int32 二维表 + int64 一维索引（GPU 张量）</text>
+
+  <rect x="540" y="120" width="348" height="86" rx="7" fill="#ffffff" stroke="#0891b2" stroke-width="1.6"/>
+  <text x="714" y="142" font-size="14" font-weight="600" text-anchor="middle" fill="#0e7490">block_table（跨 step 持久）</text>
+  <text x="714" y="159" font-size="11" text-anchor="middle" fill="#64748b">[max_num_reqs, max_num_blocks_per_req] int32</text>
+  <g font-size="11" text-anchor="middle" fill="#0f172a">
+    <rect x="566" y="168" width="46" height="26" rx="4" fill="#cffafe" stroke="#0891b2"/><text x="589" y="185">1</text>
+    <rect x="616" y="168" width="46" height="26" rx="4" fill="#cffafe" stroke="#0891b2"/><text x="639" y="185">7</text>
+    <rect x="666" y="168" width="46" height="26" rx="4" fill="#f1f5f9" stroke="#cbd5e1"/><text x="689" y="185" fill="#94a3b8">0</text>
+    <rect x="716" y="168" width="46" height="26" rx="4" fill="#f1f5f9" stroke="#cbd5e1"/><text x="739" y="185" fill="#94a3b8">0</text>
+    <text x="800" y="185" font-size="10" fill="#64748b" text-anchor="start">← req 0 行</text>
+  </g>
+
+  <rect x="540" y="226" width="348" height="86" rx="7" fill="#ffffff" stroke="#7c3aed" stroke-width="1.6"/>
+  <text x="714" y="248" font-size="14" font-weight="600" text-anchor="middle" fill="#6d28d9">slot_mapping（每 step 重算）</text>
+  <text x="714" y="265" font-size="11" text-anchor="middle" fill="#64748b">[max_num_batched_tokens] int64</text>
+  <g font-size="11" text-anchor="middle" fill="#0f172a">
+    <rect x="566" y="274" width="46" height="26" rx="4" fill="#ede9fe" stroke="#7c3aed"/><text x="589" y="291">16</text>
+    <rect x="616" y="274" width="46" height="26" rx="4" fill="#ede9fe" stroke="#7c3aed"/><text x="639" y="291">17</text>
+    <rect x="666" y="274" width="46" height="26" rx="4" fill="#ede9fe" stroke="#7c3aed"/><text x="689" y="291">18</text>
+    <rect x="716" y="274" width="46" height="26" rx="4" fill="#f1f5f9" stroke="#cbd5e1"/><text x="739" y="291" fill="#94a3b8">-1</text>
+    <text x="800" y="291" font-size="10" fill="#64748b" text-anchor="start">← PAD_SLOT_ID</text>
+  </g>
+
+  <rect x="540" y="332" width="348" height="174" rx="7" fill="#ffffff" stroke="#059669" stroke-width="1.8"/>
+  <text x="714" y="354" font-size="14" font-weight="600" text-anchor="middle" fill="#047857">KV cache 显存（每层一份，所有请求共用）</text>
+  <text x="714" y="371" font-size="11" text-anchor="middle" fill="#64748b">[2, num_blocks, block_size, num_kv_heads, head_size]</text>
+
+  <g font-size="10" text-anchor="middle">
+    <rect x="566" y="386" width="70" height="52" rx="5" fill="#f1f5f9" stroke="#94a3b8"/>
+    <text x="601" y="404" fill="#334155" font-size="11">block 0</text><text x="601" y="420" fill="#94a3b8">null</text>
+    <rect x="646" y="386" width="70" height="52" rx="5" fill="#d1fae5" stroke="#059669" stroke-width="1.6"/>
+    <text x="681" y="404" fill="#065f46" font-size="11">block 1</text>
+    <text x="681" y="420" fill="#047857">slot 16..31</text>
+    <rect x="726" y="386" width="70" height="52" rx="5" fill="#f1f5f9" stroke="#94a3b8"/>
+    <text x="761" y="404" fill="#334155" font-size="11">block 2</text><text x="761" y="420" fill="#94a3b8">…</text>
+    <rect x="806" y="386" width="70" height="52" rx="5" fill="#f1f5f9" stroke="#94a3b8"/>
+    <text x="841" y="404" fill="#334155" font-size="11">block 3</text><text x="841" y="420" fill="#94a3b8">…</text>
+  </g>
+  <text x="714" y="460" font-size="11" text-anchor="middle" fill="#475569">slot_id = block_id × block_size + (pos mod block_size)</text>
+  <text x="714" y="480" font-size="11" text-anchor="middle" fill="#059669">block_table → 分页读　　slot_mapping → scatter 写</text>
+
+  <!-- 跨层箭头 -->
+  <line x1="404" y1="145" x2="536" y2="145" stroke="#2563eb" stroke-width="2" marker-end="url(#ab)"/>
+  <text x="470" y="136" font-size="11" text-anchor="middle" fill="#1d4ed8">SchedulerOutput</text>
+  <text x="470" y="162" font-size="10" text-anchor="middle" fill="#2563eb">get_block_ids()</text>
+  <text x="470" y="176" font-size="10" text-anchor="middle" fill="#64748b">对象 → int 列表</text>
+
+  <line x1="714" y1="210" x2="714" y2="222" stroke="#475569" stroke-width="1.6" marker-end="url(#a)"/>
+  <text x="806" y="220" font-size="10" fill="#64748b">Triton kernel</text>
+  <line x1="714" y1="316" x2="714" y2="328" stroke="#475569" stroke-width="1.6" marker-end="url(#a)"/>
+
+  <text x="470" y="30" font-size="17" font-weight="600" text-anchor="middle" fill="#0f172a">vLLM V1 KV Cache 分层框架</text>
+</svg>
