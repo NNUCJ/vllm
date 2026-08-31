@@ -1,0 +1,730 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>vLLM FP8 量化工作流 · 汇报大纲</title>
+<style>
+:root{
+  --bg:#fbfaf8; --panel:#ffffff; --ink:#1b1a17; --ink-2:#4a4741; --ink-3:#7d786f;
+  --line:#e5e1d9; --line-2:#d6d1c6;
+  --accent:#8b5cf6; --accent-soft:#f3edff;
+  --moe:#ea8c2f; --moe-soft:#fdf1e2;
+  --warn:#c2410c; --warn-soft:#fdf0e8;
+  --ok:#0f7a5a; --ok-soft:#e8f5ef;
+  --code-bg:#f4f2ee;
+  --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,"Liberation Mono",monospace;
+  --sans:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei","Source Han Sans SC","Noto Sans CJK SC",sans-serif;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#16151a; --panel:#1e1d23; --ink:#eceaf2; --ink-2:#b8b4c0; --ink-3:#87838f;
+    --line:#2e2c35; --line-2:#3d3a45;
+    --accent:#a78bfa; --accent-soft:#2a2340;
+    --moe:#f0a55a; --moe-soft:#3a2b1a;
+    --warn:#fb923c; --warn-soft:#3a271c;
+    --ok:#4ade80; --ok-soft:#1c3329;
+    --code-bg:#26252c;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#16151a; --panel:#1e1d23; --ink:#eceaf2; --ink-2:#b8b4c0; --ink-3:#87838f;
+  --line:#2e2c35; --line-2:#3d3a45;
+  --accent:#a78bfa; --accent-soft:#2a2340;
+  --moe:#f0a55a; --moe-soft:#3a2b1a;
+  --warn:#fb923c; --warn-soft:#3a271c;
+  --ok:#4ade80; --ok-soft:#1c3329;
+  --code-bg:#26252c;
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth; scroll-padding-top:24px}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);
+  font-size:16px;line-height:1.75;-webkit-font-smoothing:antialiased}
+a{color:inherit}
+
+/* ---------- layout ---------- */
+.wrap{display:grid;grid-template-columns:252px minmax(0,1fr);gap:0;max-width:1320px;margin:0 auto}
+.rail{position:sticky;top:0;height:100vh;overflow-y:auto;padding:28px 18px 40px;
+  border-right:1px solid var(--line);background:var(--bg)}
+.main{padding:44px 52px 120px;min-width:0}
+@media (max-width:940px){
+  .wrap{grid-template-columns:1fr}
+  .rail{position:static;height:auto;border-right:none;border-bottom:1px solid var(--line);padding:20px}
+  .main{padding:28px 20px 80px}
+}
+
+/* ---------- rail ---------- */
+.rail-title{font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--ink-3);
+  font-weight:600;margin:0 0 14px}
+.rail nav a{display:flex;justify-content:space-between;gap:8px;align-items:baseline;
+  text-decoration:none;color:var(--ink-2);font-size:13.5px;padding:5px 9px;border-radius:6px;
+  border-left:2px solid transparent;margin-left:-2px}
+.rail nav a:hover{background:var(--code-bg);color:var(--ink)}
+.rail nav a.on{color:var(--ink);font-weight:600;border-left-color:var(--accent);background:var(--accent-soft)}
+.rail nav a .t{font-family:var(--mono);font-size:11px;color:var(--ink-3);flex:none}
+.rail nav .grp{font-size:11px;letter-spacing:.1em;color:var(--ink-3);margin:16px 0 5px 9px;font-weight:600}
+.rail-foot{margin-top:22px;padding-top:14px;border-top:1px solid var(--line);
+  display:flex;flex-wrap:wrap;gap:6px}
+.btn{font:inherit;font-size:12px;padding:5px 10px;border:1px solid var(--line-2);border-radius:6px;
+  background:var(--panel);color:var(--ink-2);cursor:pointer}
+.btn:hover{color:var(--ink);border-color:var(--ink-3)}
+
+/* ---------- header ---------- */
+header.hd{border-bottom:1px solid var(--line);padding-bottom:26px;margin-bottom:38px}
+.kicker{font-size:12.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--accent);font-weight:700;margin:0 0 10px}
+h1{font-size:33px;line-height:1.3;margin:0 0 12px;letter-spacing:-.01em}
+.sub{color:var(--ink-2);font-size:15px;margin:0 0 20px;max-width:70ch}
+.meta{display:flex;flex-wrap:wrap;gap:8px}
+.pill{font-size:12px;font-family:var(--mono);padding:4px 10px;border-radius:99px;
+  border:1px solid var(--line-2);color:var(--ink-2);background:var(--panel)}
+.pill.hi{background:var(--accent-soft);border-color:transparent;color:var(--accent);font-weight:600}
+
+/* ---------- thesis ---------- */
+.thesis{background:var(--accent-soft);border-left:3px solid var(--accent);
+  padding:20px 24px;border-radius:0 10px 10px 0;margin:0 0 40px}
+.thesis .lab{font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--accent);
+  font-weight:700;margin-bottom:8px}
+.thesis p{margin:0;font-size:18px;line-height:1.65;font-weight:600}
+.thesis p+p{margin-top:10px;font-size:14.5px;font-weight:400;color:var(--ink-2)}
+
+/* ---------- act ---------- */
+.act{margin:52px 0 22px;display:flex;align-items:baseline;gap:14px;
+  padding-bottom:10px;border-bottom:2px solid var(--ink)}
+.act h2{font-size:22px;margin:0;letter-spacing:-.01em}
+.act .dur{margin-left:auto;font-family:var(--mono);font-size:12.5px;color:var(--ink-3)}
+
+/* ---------- section card ---------- */
+section.sec{background:var(--panel);border:1px solid var(--line);border-radius:12px;
+  padding:24px 28px;margin:0 0 20px;scroll-margin-top:20px}
+.sec-hd{display:flex;align-items:baseline;gap:12px;margin-bottom:6px;flex-wrap:wrap}
+.num{font-family:var(--mono);font-size:12px;font-weight:700;color:var(--accent);
+  background:var(--accent-soft);padding:3px 8px;border-radius:5px;flex:none}
+.sec-hd h3{font-size:19px;margin:0;letter-spacing:-.005em}
+.sec-hd .dur{margin-left:auto;font-family:var(--mono);font-size:12px;color:var(--ink-3);flex:none}
+.line{font-size:15.5px;color:var(--ink);margin:10px 0 16px;padding:12px 16px;
+  background:var(--code-bg);border-radius:8px;line-height:1.65}
+.line::before{content:"开场句 ";font-size:11px;letter-spacing:.1em;color:var(--ink-3);font-weight:600}
+
+h4{font-size:13px;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-3);
+  margin:20px 0 8px;font-weight:700}
+ul,ol{margin:8px 0;padding-left:22px}
+li{margin:5px 0}
+li::marker{color:var(--ink-3)}
+p{margin:8px 0}
+strong{font-weight:650}
+code{font-family:var(--mono);font-size:.87em;background:var(--code-bg);padding:1.5px 5px;
+  border-radius:4px;color:var(--ink)}
+pre{background:var(--code-bg);border:1px solid var(--line);border-radius:8px;padding:14px 16px;
+  overflow-x:auto;margin:12px 0}
+pre code{background:none;padding:0;font-size:12.5px;line-height:1.6}
+
+/* ---------- callouts ---------- */
+.note{border-left:3px solid var(--line-2);padding:10px 0 10px 16px;margin:14px 0;color:var(--ink-2);font-size:14.5px}
+.note.key{border-color:var(--accent);background:var(--accent-soft);border-radius:0 8px 8px 0;
+  padding:12px 16px;color:var(--ink)}
+.note.trap{border-color:var(--warn);background:var(--warn-soft);border-radius:0 8px 8px 0;
+  padding:12px 16px;color:var(--ink)}
+.note .tag{display:block;font-size:11px;letter-spacing:.1em;text-transform:uppercase;
+  font-weight:700;margin-bottom:5px}
+.note.key .tag{color:var(--accent)}
+.note.trap .tag{color:var(--warn)}
+
+/* ---------- table ---------- */
+.tw{overflow-x:auto;margin:14px 0;border:1px solid var(--line);border-radius:8px}
+table{border-collapse:collapse;width:100%;font-size:13.5px;min-width:440px}
+th,td{text-align:left;padding:9px 13px;border-bottom:1px solid var(--line);vertical-align:top}
+th{background:var(--code-bg);font-weight:650;font-size:12.5px;color:var(--ink-2);white-space:nowrap}
+tr:last-child td{border-bottom:none}
+td code{font-size:12px}
+
+/* ---------- figure ---------- */
+figure{margin:16px 0;border:1px solid var(--line);border-radius:10px;overflow:hidden;background:var(--code-bg)}
+figure img{display:block;width:100%;height:auto;cursor:zoom-in}
+figcaption{font-size:12.5px;color:var(--ink-3);padding:9px 14px;border-top:1px solid var(--line);
+  background:var(--panel)}
+figcaption b{color:var(--ink-2);font-weight:650}
+
+/* ---------- qa ---------- */
+details.qa{border:1px solid var(--line);border-radius:8px;margin:9px 0;background:var(--panel)}
+details.qa>summary{cursor:pointer;padding:11px 15px;font-weight:600;font-size:14.5px;list-style:none;
+  display:flex;gap:10px;align-items:baseline}
+details.qa>summary::-webkit-details-marker{display:none}
+details.qa>summary::before{content:"Q";font-family:var(--mono);font-size:11px;font-weight:700;
+  color:var(--warn);background:var(--warn-soft);padding:2px 7px;border-radius:4px;flex:none}
+details.qa[open]>summary{border-bottom:1px solid var(--line)}
+details.qa .body{padding:12px 15px 14px}
+details.qa .body>:first-child{margin-top:0}
+details.qa .body>:last-child{margin-bottom:0}
+
+/* ---------- misc ---------- */
+.ref{font-size:12.5px;color:var(--ink-3);margin-top:16px;padding-top:12px;border-top:1px dashed var(--line-2)}
+.ref b{color:var(--ink-2)}
+.two{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+@media (max-width:760px){.two{grid-template-columns:1fr}}
+.box{border:1px solid var(--line);border-radius:9px;padding:14px 16px}
+.box .bt{font-size:12px;letter-spacing:.06em;text-transform:uppercase;font-weight:700;margin-bottom:6px}
+.box.d{border-left:3px solid var(--accent)} .box.d .bt{color:var(--accent)}
+.box.m{border-left:3px solid var(--moe)} .box.m .bt{color:var(--moe)}
+.box ul{margin:4px 0;padding-left:18px;font-size:14px}
+
+#lb{position:fixed;inset:0;background:rgba(0,0,0,.86);display:none;align-items:center;
+  justify-content:center;z-index:99;cursor:zoom-out;padding:24px}
+#lb.on{display:flex}
+#lb img{max-width:100%;max-height:100%;object-fit:contain}
+
+@media print{
+  .rail,.rail-foot,#lb{display:none}
+  .wrap{display:block;max-width:none}
+  .main{padding:0}
+  section.sec{break-inside:avoid;border-color:#ccc}
+  details.qa{break-inside:avoid}
+  details.qa[open]>summary{border:none}
+  body{font-size:11pt;background:#fff;color:#000}
+}
+</style>
+</head>
+<body>
+
+<div class="wrap">
+<aside class="rail">
+  <p class="rail-title">演讲流程</p>
+  <nav id="nav">
+    <div class="grp">开场</div>
+    <a href="#s0"><span>0 · 主旨与三个前置结论</span><span class="t">4′</span></a>
+    <div class="grp">第一幕 · 初始化</div>
+    <a href="#s1"><span>1 · 量化了什么</span><span class="t">5′</span></a>
+    <a href="#s2"><span>2 · 配置怎么下发</span><span class="t">4′</span></a>
+    <a href="#s3"><span>3 · 后端怎么选</span><span class="t">8′</span></a>
+    <a href="#s4"><span>4 · UE8M0 与黑名单 ★</span><span class="t">10′</span></a>
+    <div class="grp">第二幕 · 运行时</div>
+    <a href="#s5"><span>5 · dense 三步骨架</span><span class="t">5′</span></a>
+    <a href="#s6"><span>6 · MoE 六步流水线</span><span class="t">5′</span></a>
+    <a href="#s7"><span>7 · 运行时的唯一判定</span><span class="t">3′</span></a>
+    <div class="grp">收尾</div>
+    <a href="#s8"><span>8 · 结论矩阵与排查</span><span class="t">4′</span></a>
+    <a href="#s9"><span>9 · 五条误解 · 收束</span><span class="t">2′</span></a>
+    <a href="#qa"><span>Q&amp;A 预案</span><span class="t">—</span></a>
+  </nav>
+  <div class="rail-foot">
+    <button class="btn" id="tg">深/浅色</button>
+    <button class="btn" id="ex">展开 Q&amp;A</button>
+    <button class="btn" onclick="window.print()">打印</button>
+  </div>
+</aside>
+
+<main class="main">
+
+<header class="hd">
+  <p class="kicker">技术分享 · 汇报大纲</p>
+  <h1>vLLM FP8 量化工作流<br>—— 以 Qwen3.6-35B-A3B-FP8 为例</h1>
+  <p class="sub">一个 FP8 模型跑起来时，哪些算子被量化、dense 与 MoE 各自怎么选后端、
+  为什么加载完权重还要再改一遍、Blackwell 上那条 DeepGEMM 黑名单是怎么来的、
+  运行时一次前向到底发生了什么。</p>
+  <div class="meta">
+    <span class="pill hi">总时长 50′ + Q&amp;A 10′</span>
+    <span class="pill">10 个段落 · 13 张图</span>
+    <span class="pill">分支 v0.25.1-self</span>
+    <span class="pill">靶点 SM100 / B200</span>
+  </div>
+</header>
+
+<div class="thesis">
+  <div class="lab">全场只需要听众记住这一句</div>
+  <p>vLLM 的 FP8 量化分成两段：<b>初始化阶段做完全部决策并把权重改成目标形态，运行时阶段只是照着执行。</b></p>
+  <p>「用哪个 GEMM 后端」「scale 存成什么格式」「权重要不要重排」这些问题全部在服务启动时就有了答案，一次前向里不再有任何选择动作。后面 50 分钟都是这句话的展开。</p>
+</div>
+
+<!-- ========== 开场 ========== -->
+<div class="act"><h2>开场</h2><span class="dur">4 分钟</span></div>
+
+<section class="sec" id="s0">
+  <div class="sec-hd"><span class="num">0</span><h3>主旨与三个前置结论</h3><span class="dur">4′</span></div>
+  <p class="line">「今天讲的不是 FP8 的数值格式，而是 vLLM 里 FP8 的<b>决策链路</b>——从 checkpoint 落到显卡上的这一路，谁在什么时候决定了什么。」</p>
+
+  <figure>
+    <img src="images/overview_two_phase.png" alt="vLLM FP8 量化工作流总览">
+    <figcaption><b>图 1</b> 全景图：上半部五个初始化步骤对应第 1–4 段，下半部对应第 5–7 段。第 ⑤ 步打星号 —— 它既是两阶段的分界，也是今天的高潮。</figcaption>
+  </figure>
+
+  <h4>三个必须先立住的前置结论</h4>
+  <div class="two">
+    <div class="box d">
+      <div class="bt">其一 · 两套独立机制</div>
+      <p style="font-size:14px;margin:0">dense 与 MoE 的入口、候选表、选择算法、覆盖开关<b>一律不共享</b>。所以「我装了 DeepGEMM，模型就在用 DeepGEMM」这个推断不成立。Qwen3.6 在 Blackwell 上恰好就是 dense 不用、MoE 可能用。</p>
+    </div>
+    <div class="box m">
+      <div class="bt">其二 · 只量化大矩阵乘</div>
+      <p style="font-size:14px;margin:0">router、各种门控、layernorm、卷积、状态参数一律保持 BF16。checkpoint 用 <code>modules_to_not_convert</code> 的 <b>648 项</b>把它们显式列了出来。</p>
+    </div>
+  </div>
+  <div class="note key" style="margin-top:16px">
+    <span class="tag">其三 · 决策全在初始化阶段定死</span>
+    dense 侧构造期定完就不再变；MoE 侧多一次「通信器准备期」的替换机会，但也在首次 forward 之前完成。
+    运行时唯一还会判定的是 MoE 的 <code>FallbackExperts</code> 系列 —— 留到第 7 段讲。
+  </div>
+
+  <div class="ref"><b>讲法提示：</b>这三条建议做成一页幻灯片，后面每次听众露出困惑表情时都可以指回来。全场至少三次要回到「其一」。</div>
+</section>
+
+<!-- ========== 第一幕 ========== -->
+<div class="act"><h2>第一幕 · 初始化：从 checkpoint 到权重定型</h2><span class="dur">27 分钟</span></div>
+
+<section class="sec" id="s1">
+  <div class="sec-hd"><span class="num">1</span><h3>量化了什么 —— Qwen3.6 的实际情况</h3><span class="dur">5′</span></div>
+  <p class="line">「先把靶子摆出来。以下所有数据读自 <code>config.json</code> 和 safetensors 头，不是推测。」</p>
+
+  <h4>checkpoint 的四个字段，各自决定一整条路</h4>
+  <div class="tw"><table>
+    <tr><th>字段</th><th>取值</th><th>决定了什么</th></tr>
+    <tr><td><code>quant_method</code></td><td><code>fp8</code></td><td>用哪个配置类（<code>Fp8Config</code>）和哪套 method</td></tr>
+    <tr><td><code>weight_block_size</code></td><td><code>[128,128]</code></td><td>走 <b>block 量化</b>那条路 —— 第 3 段的 block 候选表、DeepGEMM 才有可能被选上</td></tr>
+    <tr><td><code>activation_scheme</code></td><td><code>dynamic</code></td><td>激活没有预存 scale，每次 forward 现算（第 5 段）</td></tr>
+    <tr><td><code>modules_to_not_convert</code></td><td>648 项</td><td>哪些层保持 BF16</td></tr>
+  </table></div>
+  <div class="note">另有一个看似无关的字段：<code>text_config.model_type = qwen3_5_moe_text</code>。<b>它会在第 3 段决定 dense 侧的最终结果</b> —— 埋个扣子，这里先点一句。</div>
+
+  <p><b>模型结构：</b>40 层按 <code>[linear_attention ×3, full_attention]</code> 循环，即 30 层 Gated DeltaNet + 10 层标准注意力；<code>hidden_size</code> 2048；MoE 部分 256 个 routed expert、top-8、<code>moe_intermediate_size</code> 512，另有 1 个同为 512 宽的 shared expert。</p>
+
+  <figure>
+    <img src="images/qwen36_quantized_layer_map.png" alt="Qwen3.6 一层的数据流与权重位置">
+    <figcaption><b>图 2</b> 读图法：<b>Linear 一律画成梯形</b>（这个模型里唯一可量化的算子类型）；<b>框线颜色就是量化归属</b> —— 紫框 = dense 路径 FP8，橙框 = MoE 路径 FP8，细灰框 = 保持 BF16。扫一遍框色就读完了全部量化位置。</figcaption>
+  </figure>
+
+  <div class="note trap">
+    <span class="tag">两个最容易搞错的点 —— 现场一定要点名</span>
+    <b>① <code>o_proj</code> 属于 dense</b>，不属于 MoE。它在注意力之后、残差之前。<br>
+    <b>② shared expert 属于 dense。</b>它和 routed experts 在同一个 MoE block 里、形状完全相同（都是 <code>[512,2048]</code> 和 <code>[2048,512]</code>），却由两套互不相干的机制选后端 —— 这就是「其一」在模型结构上的具体落点。
+  </div>
+
+  <h4>规律：被量化的都是大矩阵乘；保持 BF16 的分两类</h4>
+  <ul>
+    <li><b>太小不值得</b> —— <code>in_proj_a</code> / <code>in_proj_b</code> 只有 <code>32×2048</code>，量化省不下多少，反而多两次量化/反量化开销。</li>
+    <li><b>对误差敏感</b> —— router 一旦出错，选出的专家就全错了，误差不是「变模糊一点」而是「换了一批专家」；layernorm、<code>A_log</code>/<code>dt_bias</code> 这类状态参数直接决定递推稳定性。</li>
+  </ul>
+  <p>GDN 层能把这条规律讲透（图 2 左下面板）：同一份 <code>x</code> 喂给四个投影，<code>in_proj_b</code> 经 sigmoid 变成写入强度 β，<code>in_proj_a</code> 配合 <code>A_log</code>/<code>dt_bias</code> 变成衰减率 g —— <b>产出的是直接控制递推稳定性的门控标量</b>，所以保持 BF16。而 <code>in_proj_z</code> 虽然同为门控用途，却是 <code>[4096,2048]</code> 的大矩阵乘，仍然被量化。<b>判据是「是不是大矩阵乘 + 误差敏不敏感」，不是「叫不叫门控」。</b></p>
+</section>
+
+<section class="sec" id="s2">
+  <div class="sec-hd"><span class="num">2</span><h3>配置怎么传到每一层</h3><span class="dur">4′</span></div>
+  <p class="line">「648 项跳过列表是怎么落到具体某一层上的？答案比想象的简单 —— 代码里只有一处在做这件事。」</p>
+
+  <figure>
+    <img src="images/quant_config_build.png" alt="quant_config 的构造过程">
+    <figcaption><b>图 3</b> <code>quant_config</code> 的五步构造过程。它是<b>进程级唯一的一个对象</b>。</figcaption>
+  </figure>
+
+  <h4>关于 quant_config 只讲两条</h4>
+  <ul>
+    <li><b>它只描述 checkpoint，不描述硬件。</b>它不知道跑在哪张卡上，也不知道该用 CUTLASS 还是 DeepGEMM。所有硬件相关的决策都发生在后面各层的 <code>quant_method</code> 构造函数里。</li>
+    <li><b>有两处会往它上面补写字段</b>（图 3 第 4 步）：<code>config/vllm.py:931</code> 的 Blackwell 黑名单把 <code>use_deep_gemm</code> 置 <code>False</code>；<code>model_loader/utils.py:284</code> 把 <code>packed_modules_mapping</code> 挂上去 —— 后者是必需的，因为 checkpoint 里 <code>in_proj_qkv</code>/<code>in_proj_z</code> 是两个张量而 vLLM 建的是融合的 <code>in_proj_qkvz</code>，没有这张映射表，按层名跳过的逻辑会全部失配。</li>
+  </ul>
+
+  <div class="two">
+    <figure style="margin:16px 0 0"><img src="images/dense_quant_method_chain.png" alt="dense quant_method 装配链">
+      <figcaption><b>图 4</b> dense 装配链（实线 = 初始化，虚线 = forward）</figcaption></figure>
+    <figure style="margin:16px 0 0"><img src="images/moe_quant_method_chain.png" alt="MoE quant_method 装配链">
+      <figcaption><b>图 5</b> MoE 装配链 —— 注意比 dense 多一个阶段 ⑧</figcaption></figure>
+  </div>
+
+  <h4>两条链形状相似，讲三个对比就够</h4>
+  <div class="note key">
+    <span class="tag">唯一的提问点</span>
+    dense 在 <code>LinearBase.__init__</code>（<code>linear.py:274</code>），MoE 在 <code>RoutedExperts.__init__</code>（<code>routed_experts.py:186</code>），都是一句 <code>quant_config.get_quant_method(self, prefix)</code>。
+    <b>传的是层对象 + 层名</b> —— 同一个 <code>Fp8Config</code> 被问几百次、每次 <code>prefix</code> 不同，这就是「一份 checkpoint 内部混合精度」的<b>全部</b>实现机制，代码里没有第二处。
+  </div>
+  <ul>
+    <li><b>返回 <code>None</code> 的行为不对称。</b>dense 侧 <code>raise</code>，MoE 侧静默兜底成 <code>UnquantizedFusedMoEMethod</code> —— 排查时注意，MoE 侧「悄悄没量化」是可能的。</li>
+    <li><b>MoE 多一个阶段。</b>dense 是「构造期 → 加载期 → forward」三段；MoE 在加载期之后多一个<b>通信器准备期</b>（图 5 的 ⑧），<code>maybe_init_modular_kernel</code> 可能把 <code>quant_method</code> 整个替换成 <code>FusedMoEModularMethod</code> 的包装。源码注释写明时机是「所有权重加载与后处理完成之后」（<code>moe_runner.py:854</code>），<b>仍属初始化阶段</b>。</li>
+    <li><b>还有一类层压根不问 <code>Fp8Config</code></b>：<code>mlp.gate</code>（router）和 <code>shared_expert_gate</code> 建层时显式传 <code>quant_config=None</code>（<code>qwen3_next.py:138/:146</code>）。所以它们保持 BF16 与 648 项名单里有没有它们<b>无关</b>。</li>
+  </ul>
+</section>
+
+<section class="sec" id="s3">
+  <div class="sec-hd"><span class="num">3</span><h3>后端怎么选</h3><span class="dur">8′</span></div>
+  <p class="line">「这一段是全场信息密度最高的地方。核心只有一句：<b>列表顺序就是优先级 —— 没有打分、没有 benchmark、没有 autotune。</b>」</p>
+
+  <h4>3.1 dense：两张候选表 + 三道门禁 <span style="color:var(--ink-3);font-weight:400">（3′）</span></h4>
+  <figure><img src="images/dense_backend_tree.png" alt="dense FP8 Linear 的后端选择流程">
+    <figcaption><b>图 6</b> dense FP8 Linear 的后端选择流程</figcaption></figure>
+
+  <p>第一步按<b>量化粒度</b>二选一张表（<code>kernels/linear/__init__.py:594</code>）：有 <code>weight_block_size</code> 走 block 表，否则走 per-tensor/per-token 表。这一步之后候选集合就固定了。<b>DeepGEMM 只存在于 block 表</b> —— per-tensor 权重根本不会遇到它。</p>
+
+  <div class="tw"><table>
+    <tr><th>优先级</th><th>kernel 类</th><th>可用条件要点</th></tr>
+    <tr><td>1</td><td><code>FlashInferFp8DeepGEMMDynamicBlockScaledKernel</code></td><td><b>仅 SM90</b>（符号名硬编码 <code>fp8_blockscale_gemm_sm90</code>）</td></tr>
+    <tr><td>2</td><td><code>DeepGemmFp8BlockScaledMMKernel</code></td><td>SM90/100/120；需 bf16 输出、N/K 对齐、<b>不在 Blackwell 黑名单</b></td></tr>
+    <tr><td>3</td><td><code>CutlassFp8BlockScaledMMKernel</code></td><td>SM90+，只要求 <code>group_shape == (1,128)</code></td></tr>
+    <tr><td>4–6</td><td>Marlin / Triton / Humming</td><td>Marlin 需显式开关；Triton 恒可用，最终兜底</td></tr>
+  </table></div>
+
+  <p>每个候选按序过<b>三道门</b>：<code>VLLM_DISABLED_KERNELS</code>（人为开关）→ <code>is_supported(cc)</code>（<b>这台机器</b>能不能跑）→ <code>can_implement(config)</code>（<b>这一层</b>能不能跑）。三道全过即返回，构造期定死。</p>
+  <div class="note">顺带回答一个常见追问：<b>选择为什么发生在 <code>create_weights</code> 而不是 <code>Fp8LinearMethod.__init__</code>？</b>很实际的原因 —— <code>should_use_deepgemm_for_fp8_linear</code> 要查 <code>N % 64 == 0 and K % 128 == 0</code>，而 <code>weight</code> 参数是在 <code>create_weights</code> 里才 <code>register_parameter</code> 的，此前拿不到 shape。</div>
+
+  <h4>3.2 MoE：重排 + 硬开关 + 11 道检查 <span style="color:var(--ink-3);font-weight:400">（2′）</span></h4>
+  <figure><img src="images/moe_backend_tree.png" alt="MoE FP8 的后端选择流程">
+    <figcaption><b>图 7</b> MoE FP8 的后端选择流程 —— 机制比 dense 复杂得多，分三段讲</figcaption></figure>
+  <ul>
+    <li><b>S0 重排候选表。</b><code>_get_priority_backends</code> 只重排、不删除。最关键一条：<b>严格 SM90 + block-fp8 + 单机 TP 时，<code>TRITON</code> 被显式提到 DeepGEMM 前面</b> —— 所以 Hopper 上即使装了 deep_gemm，MoE 默认也不会用它。另一条：<code>family(100)</code> + DeepEP v2 时把 <code>FLASHINFER_TRTLLM</code> 提到最前。</li>
+    <li><b>S2–S6 五个硬覆盖开关</b>，先到先得，命中即返回，<b>不支持就直接抛错、不回退</b>。</li>
+    <li><b>S7 主循环</b>，每个 backend 的 experts 类逐个过 11 道检查（<code>modular_kernel.py:536</code>）。其中一条对 Blackwell 影响很大：<code>FlashInferExperts</code>（FI-CUTLASS）的 block-fp8 限定 <code>is_device_capability(90)</code>，Blackwell 上只接受 nvfp4/mxfp4。</li>
+  </ul>
+  <div class="note trap">
+    <span class="tag">两个坑</span>
+    <b>①</b> <code>Fp8MoEMethod</code> 传的 <code>allow_vllm_cutlass=False</code>，所以 vLLM 自带的 CUTLASS MoE 在纯 FP8 路径上默认不参选。<br>
+    <b>②</b> <code>VLLM_USE_DEEP_GEMM</code> 的判据是 <code>envs.is_set()</code>，必须<b>显式 export 过</b>才生效 —— 「默认开着」和「显式设成 1」是两种不同的行为。
+  </div>
+
+  <h4>3.3 落点：Qwen3.6 在 Blackwell 上实际选中了谁 <span style="color:var(--ink-3);font-weight:400">（3′ · 本段最重要）</span></h4>
+  <figure><img src="images/qwen36_dense_deepgemm_gate.png" alt="Blackwell 上 Qwen3.6 dense 候选逐个落选">
+    <figcaption><b>图 8</b> Blackwell 上 dense 三个候选的逐个落选过程 —— 建议在这张图上逐条走一遍</figcaption></figure>
+  <ol>
+    <li><b>FlashInfer 混合体</b>在门 ② 落选，与模型无关 —— block 量化下 FlashInfer 只有 SM90 kernel。</li>
+    <li><b>DeepGEMM</b> 前四条检查全过，只挂在最后一条 <code>should_auto_disable_deep_gemm(model_type)</code> —— 一条<b>只在 Blackwell 生效的模型黑名单</b>，Qwen3.6 系列的 <code>text_config.model_type</code> 恰好都在名单里。<span style="color:var(--accent)">（第 1 段埋的扣子在这里收）</span></li>
+    <li><b>CUTLASS blockwise</b> 全过，<b>选中</b>。</li>
+  </ol>
+  <div class="note key">
+    <span class="tag">这一页要抛出的结论</span>
+    SM100 上会出现 <b>dense 走 CUTLASS、MoE 走 FlashInfer TRTLLM 或 DeepGEMM</b> 的组合 —— <b>这不是配置错误</b>。<code>select_fp8_moe_backend</code> 完全不消费这个黑名单判定。<br>
+    黑名单的成因是下一段要展开的 UE8M0 精度代价。引入它的提交是 <code>52069012f</code>（#38083），同一提交还加了 gsm8k 评测配置 —— <b>这是拿实际精度评测抓出来的回归，不是理论推导</b>。
+  </div>
+  <div class="ref"><b>可跳过的深水区（时间紧就略过，留给 Q&amp;A）：</b>三条看似能绕开黑名单、实则不能的尝试（<code>VLLM_USE_DEEP_GEMM=1</code>、<code>VLLM_USE_DEEP_GEMM_E8M0=0</code>、<code>--linear-backend deep_gemm</code>）。其中第三条会导致<b>启动失败</b>而非回退。</div>
+</section>
+
+<section class="sec" id="s4">
+  <div class="sec-hd"><span class="num">4</span><h3>★ process_weights_after_loading：为什么加载完还要改权重</h3><span class="dur">10′</span></div>
+  <p class="line">「这是全场的核心。它回答两个问题：<b>为什么必须做</b>，以及<b>具体怎么做</b>。也是上一段那条黑名单的成因所在。」</p>
+
+  <h4>4.1 问题定义 <span style="color:var(--ink-3);font-weight:400">（1′）</span></h4>
+  <p>权重从 safetensors 读进来时是 <b>checkpoint 的布局</b>：FP8 权重 <code>[N,K]</code>，scale 是 <code>[N/128, K/128]</code> 的 bf16 张量，值是任意浮点数。</p>
+  <p>但<b>每个 GEMM 后端对权重和 scale 的要求都不一样</b>：DeepGEMM 在 Blackwell 上要 2 的幂的 scale 且打包成 int32；Marlin 要自己的交错权重布局；FlashInfer 要 shuffle 过的权重；CUTLASS 则原样就能用。</p>
+  <p><code>process_weights_after_loading</code> 就是这道转换，在<b>权重读完之后、首次 forward 之前</b>每层执行一次。它是初始化阶段的最后一步，也是<b>后端差异第一次落到权重字节上</b>的地方。</p>
+  <div class="note">为什么不能放到运行时？因为它是纯开销、且结果对所有 forward 都一样 —— 放在运行时等于每步重做一遍。</div>
+
+  <h4>4.2.1 为什么必须做：硬件根据 <span style="color:var(--ink-3);font-weight:400">（3′）</span></h4>
+  <figure><img src="images/ue8m0_vs_fp32_scale.png" alt="UE8M0 与 fp32 scale 两条反量化通路">
+    <figcaption><b>图 9</b> DeepGEMM 为何要求 UE8M0 scale，而 CUTLASS 能保持 fp32 —— 两条不同的反量化通路</figcaption></figure>
+  <p><b>先看数学。</b>任何浮点数都是 <code>v = ±m × 2^e</code>。乘以 <b>2 的幂</b>时 <code>v × 2^k = ±m × 2^(e+k)</code> —— 尾数一位不动，<b>只对指数域做整数加法</b>，不需要乘法器、结果逐位精确；乘以<b>任意 fp32</b> 则需要完整 FMA（尾数相乘 + 规格化 + 一次舍入）。</p>
+  <p><b>再看硬件。</b>Blackwell 第五代 TensorCore 的 <code>tcgen05.mma</code> 提供 block-scale 变体，它的 scale factor 操作数（SFA/SFB）按 OCP Microscaling 规范定义为 <b>E8M0 字节</b>（8 bit 纯指数，bias 127，无符号位无尾数位）。scale 在 MMA 流水内部以指数加完成，与乘累加融合、零额外指令。</p>
+  <div class="note key">
+    <span class="tag">这一句是整段的支点</span>
+    <b>走这条硬件通路的前提，就是 scale 必须是 2 的幂。</b>这就是必须做重量化的全部原因 —— <b>不是 DeepGEMM 的偏好，是硬件指令的输入格式要求。</b>
+  </div>
+  <p><b>作为对照</b>，vLLM 的 CUTLASS blockwise kernel 显式声明 <code>ElementBlockScale = float</code>：MMA 用普通 FP8 指令、不携带硬件 SF 操作数，每个 K-block 的部分和在 <b>CUDA core</b> 上以 fp32 FMA 乘 <code>s_a × s_b</code> 后并入主累加器（软件 promotion）。任意 fp32 值都能参与乘法，所以<b>无格式约束、权重零改动</b>。</p>
+
+  <div class="tw"><table>
+    <tr><th>条件</th><th>格式</th><th>含义</th></tr>
+    <tr><td>E8M0 关闭</td><td><code>FLOAT32</code></td><td>fp32 张量，任意值</td></tr>
+    <tr><td>E8M0 开 + SM90</td><td><code>FLOAT32_CEIL_UE8M0</code></td><td>值取 2 的幂，<b>仍存 fp32 张量</b></td></tr>
+    <tr><td>E8M0 开 + SM100/120</td><td><code>UE8M0</code></td><td>值取 2 的幂，<b>4 合 1 打包进 int32</b></td></tr>
+  </table></div>
+  <p style="font-size:14px;color:var(--ink-2)">注意 SM90 那一档只做「取 2 的幂」不做打包 —— 因为 Hopper 没有这条硬件指令。（仲裁逻辑在 <code>deep_gemm.py:49</code> <code>DeepGemmQuantScaleFMT</code>）</p>
+
+  <h4>4.2.2 具体怎么做：四步形态变化 <span style="color:var(--ink-3);font-weight:400">（3′）</span></h4>
+  <figure><img src="images/ue8m0_packing_layout.png" alt="UE8M0 打包的四步形态变化">
+    <figcaption><b>图 10</b> scale 从 fp32 到 int32 的四步形态变化。<b>数值取自真实权重</b> —— <code>layers-0.linear_attn.in_proj_qkv.weight_scale_inv</code> 的前 4 个 K 向块。</figcaption>
+  </figure>
+  <ol>
+    <li><b>checkpoint 原始形态。</b>四个 scale 是 <code>1.745e-4 / 1.974e-4 / 1.850e-4 / 2.880e-4</code>，<code>log2</code> 分别是 <code>−12.48 / −12.31 / −12.40 / −11.76</code> —— <b>全是非 2 的幂</b>。每个占 4 字节。</li>
+    <li><b>重量化成 2 的幂</b>（<code>requant_weight_ue8m0_inplace</code>，<code>fp8_utils.py:989</code>）。核心是 <code>s ← 2^ceil(log2 s)</code>，四个 scale 变成 <code>2⁻¹² / 2⁻¹² / 2⁻¹² / 2⁻¹¹</code>。</li>
+    <li><b>只留指数 → E8M0。</b><code>byte = 指数 + 127</code>，四个 scale 变成 <code>0x73 / 0x73 / 0x73 / 0x74</code>。<b>存储从 4 字节降到 1 字节。</b></li>
+    <li><b>4 个字节合成 1 个 int32</b>（<code>pack_ue8m0_to_int</code>，<code>deep_gemm.py:395</code>）：<code>0x73 | 0x73&lt;&lt;8 | 0x73&lt;&lt;16 | 0x74&lt;&lt;24 = 0x74737373</code>。</li>
+  </ol>
+<pre><code>requant_weight_ue8m0_inplace 的四步：
+1 旧 scale 展开    repeat_interleave 把 [M/128, K/128] 扩成 [M, K]
+2 反量化           w_dq = wq.float() × s_exp        还原到 fp32 数值域
+3 UE8M0 重量化     per_block_cast_to_fp8(w_dq, [128,128], use_ue8m0=True)
+                     amax → s = amax/448 → s ← 2^ceil(log2 s) → (w_dq/s).to(fp8)
+4 原地写回         wq.copy_() / ws.copy_()          不新分配显存</code></pre>
+  <div class="note key">
+    <span class="tag">这里必须解释清楚，否则听众会问</span>
+    <b>必须整段「反量化 → 重量化」，不能只改 scale。</b>只把 scale 换成 2 的幂而不动 fp8 尾数，数值会整体偏移；先还原再按新 scale 重新取整，误差才最小。
+  </div>
+  <p><b>最终布局</b>：形状 <code>[mn, ⌈K_groups/4⌉]</code>、dtype <code>int32</code>、stride <code>(1, tma_aligned_mn)</code>。<b>第 0 维 stride 为 1</b> 意味着同一个 K 组的不同行在内存中相邻 —— 这就是 <b>MN-major（列主序）</b>。之所以这样排并把 MN 维按 4 对齐，是为了 <b>TMA</b>：DeepGEMM 用 Tensor Memory Accelerator 整块搬运 scale，只有连续且对齐才能一次拷贝。综合下来 scale 的存储/带宽降到 fp32 方案的 <b>1/4</b>。</p>
+
+  <h4>4.2.3 代价：真实数据实测 <span style="color:var(--ink-3);font-weight:400">（1.5′）</span></h4>
+  <div class="tw"><table>
+    <tr><th>指标</th><th>requant 前</th><th>requant 后</th></tr>
+    <tr><td>scale 是 2 的幂的比例</td><td>0%</td><td><b>100%</b></td></tr>
+    <tr><td>scale 上调倍数 new/old</td><td>—</td><td>min 1.077 / mean <b>1.332</b> / max 1.533</td></tr>
+    <tr><td>fp8 值域利用 <code>|wq|.max</code></td><td>≈ 448</td><td>416 / 448</td></tr>
+    <tr><td>相对量化误差</td><td>0.02250</td><td>0.03074（<b>放大 1.366×</b>）</td></tr>
+  </table></div>
+  <p><b>原理上说得通：</b>scale 被上取整，一个 block 的 amax 就只能映射到 256（<code>2^8</code>）而不是 E4M3 的最大值 448，<b>上端白白让出至多 1 bit 的动态范围</b>。</p>
+  <div class="ref"><b>可信度背书（值得说一句）：</b>这张表是用<b>仓库里的原函数</b>对真实形状的权重跑出来的，不是复刻实现；脚本在 <code>scripts/demo_requant_ue8m0.py</code>，只依赖 safetensors 和 CPU torch，现场可复现。</div>
+
+  <h4>4.2.4 后果：Blackwell 模型黑名单 <span style="color:var(--ink-3);font-weight:400">（1′）</span></h4>
+  <p>多数模型扛得住这点损失，Qwen3.5/3.6 这个架构扛不住。于是有了第 3 段那条黑名单（<code>utils/deep_gemm.py:27</code>），<b>它要避开的正是加载期这次重量化</b>。两个边界要说清楚：</p>
+  <ul>
+    <li><b>黑名单只管 dense。</b>MoE 侧走 DeepGEMM 时照常执行重量化 —— 对 256 个专家的 w13/w2 共 512 个矩阵各做一次，加载期一次性开销。</li>
+    <li><b>判定写在两个地方，起作用的是后一个。</b><code>VllmConfig.__post_init__</code> 会把 <code>quant_config.use_deep_gemm</code> 置 False，但真正让候选落选的是 <code>DeepGemmFp8BlockScaledMMKernel.can_implement</code> 里独立的那次调用。<b>所以把前者强行改回 <code>True</code> 也没用。</b></li>
+  </ul>
+
+  <h4>4.2.5 一个常被追问的问题：为什么 MoE 侧没有同样的黑名单 <span style="color:var(--ink-3);font-weight:400">（1.5′ · 建议保留，这段最能体现结论的严谨度）</span></h4>
+  <div class="note trap">
+    <span class="tag">先把一个流行的错误答案打掉</span>
+    直觉上的解释是「MoE 扛得住这点误差，dense 扛不住」。<b>这个说法在代码里找不到依据。</b>查引入黑名单的提交 <code>52069012f</code>，改动的四个文件里根本没有 MoE 侧；<code>fp8.py</code> 那 9 行全部落在 <code>Fp8LinearMethod.__init__</code>，而 <code>Fp8MoEMethod</code> 与 <code>select_fp8_moe_backend</code> <b>一次都没读过 <code>use_deep_gemm</code></b>。
+    所以 MoE 不是「被评估后判定可以接受」，而是<b>这次修复的作用域从一开始就只覆盖 dense</b>。
+  </div>
+  <p><b>作者只修 dense 就收工，有三个可查证的原因：</b></p>
+  <ol>
+    <li><b>Blackwell 上 MoE 默认压根不走 DeepGEMM。</b>优先级里 <code>FLASHINFER_TRTLLM</code> 排在 <code>DEEPGEMM</code> 前面，SM100 + block-fp8 默认选中的是 <code>TrtLlmFp8ExpertsMonolithic</code>。<b>默认部署里「MoE + DeepGEMM + UE8M0」这个组合不会被触发</b>，修它没有收益。</li>
+    <li><b>修复由评测驱动，评测覆盖到哪就修到哪。</b>同一提交新增了 <code>models-qwen35-blackwell.txt</code> 的 gsm8k 回归配置 —— 跑出掉点 → 定位到 dense 的 DeepGEMM E8M0 → 关掉 → 分数恢复。这是一次目标明确的 bugfix，不是对称的双路评估。</li>
+    <li><b>两侧的误差暴露面确实不同。</b>dense 的量化投影在<b>每一层、每个 token</b> 的关键路径上；routed expert 每个 token 只激活 256 个里的 8 个，误差累积次数差一个量级。<b>但这是结构上的合理推断，不是仓库里有实测数据支撑的结论。</b></li>
+  </ol>
+  <div class="note key">
+    <span class="tag">实践含义 —— 这句话对听众最有用</span>
+    如果在 SM100 上刻意把 MoE 逼到 DeepGEMM（不装 flashinfer，或 <code>VLLM_USE_DEEP_GEMM=1</code>），512 个专家矩阵会照常做 UE8M0 重量化，误差放大倍数与 dense 同源（实测 ×1.37），而这条路<b>没有被任何评测覆盖过，也没有黑名单保护</b>。真要用，建议自己先跑一遍精度评测。
+  </div>
+
+  <h4>4.3 收口：各后端做了什么 <span style="color:var(--ink-3);font-weight:400">（1′ · 一张表带过）</span></h4>
+  <div class="tw"><table>
+    <tr><th></th><th>改数值</th><th>改布局</th><th>什么都不做</th></tr>
+    <tr><td><b>dense</b></td><td>DeepGEMM(Blackwell) 重量化、Marlin repack</td><td>DeepGEMM(SM90)、CUTLASS、Triton 的 block strategy</td><td>—</td></tr>
+    <tr><td><b>MoE</b></td><td>DeepGEMM 重量化、Marlin repack、AITER shuffle</td><td>FlashInfer shuffle</td><td>Triton、vLLM CUTLASS</td></tr>
+  </table></div>
+  <p><b>这张表就是 4.1 那个问题的答案</b>：<code>process_weights_after_loading</code> 存在，是因为后端对权重形态的要求分布在「完全不改 → 只改布局 → 改数值」这个谱系上，而 checkpoint 只能存一种形态。</p>
+  <div class="note key">
+    <span class="tag">Qwen3.6 on SM100 的实际情况 —— 本幕的落点</span>
+    dense 走 CUTLASS → <b>只改布局，权重一个字节都不会被改动，checkpoint 的精度原样保留</b>；MoE 走 FlashInfer TRTLLM → shuffle，或走 DeepGEMM → 512 个专家矩阵逐个重量化 + 打包。
+  </div>
+</section>
+
+<!-- ========== 第二幕 ========== -->
+<div class="act"><h2>第二幕 · 运行时：一次前向发生了什么</h2><span class="dur">13 分钟</span></div>
+
+<section class="sec" id="s5">
+  <div class="sec-hd"><span class="num">5</span><h3>dense：三步骨架</h3><span class="dur">5′</span></div>
+  <p class="line">「第一幕讲完，运行时其实没多少东西了 —— 这正是主旨那句话要的效果。dense 侧只有三步。」</p>
+
+  <figure><img src="images/dense_runtime.png" alt="dense FP8 Linear 的运行期调用链">
+    <figcaption><b>图 11</b> dense FP8 Linear 的运行期调用链（整张图都在 forward 阶段）</figcaption></figure>
+
+<pre><code>① if self.apply_input_quant:                      ← 类级开关
+       q_input, As = self.quant_fp8(input_2d, ...)   激活量化
+   else:
+       q_input = input_2d                            直接送 BF16
+② out = self.apply_block_scaled_mm(A, B, As, Bs)  ← 唯一的抽象方法
+③ out = (out + bias).to(out_dtype).view(shape)      epilogue</code></pre>
+
+  <div class="note key">
+    <span class="tag">一句话</span>
+    <b>「选后端」最终只落在第 ② 步一个抽象方法的实现上。</b>第 ③ 步各后端完全共用；第 ① 步由类级开关 <code>apply_input_quant</code> 控制 —— FlashInfer 那两个类置为 <code>False</code>，它们接受 BF16 输入、在 kernel 内部自行转 FP8。
+  </div>
+
+  <h4>5.1 激活量化：<code>[1,128]</code> 的由来 <span style="color:var(--ink-3);font-weight:400">（2′）</span></h4>
+  <figure><img src="images/quant_fp8_block_workflow.png" alt="QuantFP8 与 block FP8 GEMM 的粒度耦合">
+    <figcaption><b>图 12</b> 激活量化与 block FP8 GEMM 的粒度耦合</figcaption></figure>
+  <p>执行者是 kernel 构造期就定死的 <code>QuantFP8(static=False, group_shape=(1,128))</code>。为什么权重是 <code>[128,128]</code> 而激活是 <code>[1,128]</code>？</p>
+  <div class="two">
+    <div class="box d">
+      <div class="bt">K 方向的 128 · 数学前提</div>
+      <p style="font-size:14px;margin:0 0 6px">GEMM 按 128 切 K 片，片内先做 FP8 TensorCore 点积再乘 scale 累加：</p>
+      <p style="font-family:var(--mono);font-size:12.5px;margin:0 0 6px">acc += (Aq[m,kt]·Wq[n,kt]ᵀ) × As[m,kt] × Bs[n,kt]</p>
+      <p style="font-size:14px;margin:0">合法的前提是<b>片内 As、Bs 都是常数</b>，反量化因子才能提到求和号外面。所以激活的组宽<b>必须</b>等于权重块的 K 宽 —— 代码里是强制的（<code>fp8.py:307</code> 直接拿 <code>weight_block_size[0]</code> 构造），<b>不是独立配置项</b>。</p>
+    </div>
+    <div class="box m">
+      <div class="bt">M 方向逐行 · 精度选择</div>
+      <p style="font-size:14px;margin:0">激活逐 token 幅值差异大、常有离群值；<code>[1,·]</code> 让离群 token 的 absmax <b>只污染它自己那一组</b>。权重则相反 —— 分布平稳、可离线精调，N 方向 128 行共享一个 scale 就够，还省 128 倍 scale 存储。</p>
+    </div>
+  </div>
+
+  <h4>5.2 与第 4 段呼应：权重离线打包，激活在线打包 <span style="color:var(--ink-3);font-weight:400">（1.5′）</span></h4>
+  <p>Blackwell + DeepGEMM 时，<b>GEMM 两侧的 scale 都是 UE8M0</b>，但生成时机完全不同：</p>
+  <div class="tw"><table>
+    <tr><th></th><th>谁做</th><th>何时</th><th>怎么做</th></tr>
+    <tr><td><b>权重侧</b></td><td><code>process_weights_after_loading</code></td><td>加载期一次</td><td>重量化 + <code>transform_sf_into_required_layout</code> 打包（第 4 段）</td></tr>
+    <tr><td><b>激活侧</b></td><td><code>torch.ops._C.per_token_group_fp8_quant_packed</code></td><td><b>每次 forward</b></td><td>一个 csrc kernel 内同时完成量化、取指数、4 合 1 打包</td></tr>
+  </table></div>
+  <p>激活侧之所以能一趟做完，是因为激活本来就要现场量化 —— 顺手把 scale 直接写成 int32 的 TMA 对齐布局，省掉一趟额外的显存往返。这个 kernel 用位运算提取 UE8M0（取 float 的指数位，尾数非零则 +1，与 <code>exp2f(ceilf(log2f(x)))</code> 位级等价但没有超越函数开销），全寄存器驻留、无 shared memory。</p>
+  <div class="note trap">
+    <span class="tag">顺手打掉一个误解</span>
+    <b>换 GEMM 后端不会让激活量化变快</b> —— 两条分支底层都是 csrc 的同一批 <code>per_token_group</code> 算子，区别只在 scale 的输出排布（fp32 列主序 vs int32 打包）。
+  </div>
+</section>
+
+<section class="sec" id="s6">
+  <div class="sec-hd"><span class="num">6</span><h3>MoE：六步流水线</h3><span class="dur">5′</span></div>
+  <p class="line">「MoE 侧多了路由带来的散乱数据搬运，但 GEMM 后端仍然只负责其中两步。」</p>
+
+  <figure><img src="images/moe_runtime.png" alt="routed MoE 的运行期调用链">
+    <figcaption><b>图 13</b> routed MoE 的运行期调用链（contiguous 布局 + DeepGEMM）</figcaption></figure>
+
+  <p>contiguous 布局下六步：<b>prepare 量化 → permute 重排 → GEMM1 → 激活+再量化 → GEMM2 → finalize 合并</b>。</p>
+  <div class="note key">
+    <span class="tag">看图角标那一排就够了</span>
+    <b>DeepGEMM 只负责 ③⑤ 两次 grouped GEMM。</b>进出口的重排（②⑥）和中间量化（④）都是 vLLM 自己的 Triton kernel ——
+    <code>csrc → Triton → DG → Triton → DG → Triton</code>。
+  </div>
+
+  <h4>6.1 permute / finalize 背后的三个 Triton 算子 <span style="color:var(--ink-3);font-weight:400">（2.5′ · 时间紧可压成一句）</span></h4>
+  <p>它们解决同一个问题：<b>grouped GEMM 要求同一专家的 token 在内存中连续、且每段起点对齐到 128，而路由结果天然是散乱的。</b></p>
+  <ul>
+    <li><b><code>count_expert_num_tokens</code></b> —— 一个 program 负责一个专家，扫一遍 <code>topk_ids</code> 数出属于自己的元素个数。若 prepare/finalize 是 DeepEP 一类通信器，通信本身已产出这个计数，则直接复用、不启动这个 kernel。</li>
+    <li><b><code>ep_scatter</code></b> —— 两个 kernel 串联。kernel 1 把每专家 token 数<b>向上取整到 128 再前缀和</b>得到分段起点，并填 <code>m_indices</code>；<code>expert_ids</code> 调用前已整体初始化为 −1，<b>padding 行保持 −1，DeepGEMM 的 scheduler 见负数就跳过整个 block</b>。kernel 2 按 token 搬运，用 <code>tl.atomic_add</code> 原子抢占段内槽位，拷贝 fp8 行与 scale，并记录 <code>inv_perm</code>。<b>MXFP8 的 scale 打包也在这个 kernel 里现场完成</b>。</li>
+    <li><b><code>ep_gather</code></b> —— 用 <code>inv_perm</code> 反查每个 (token, expert) 对在 GEMM2 输出中的源行，乘 <code>topk_weight</code> 累加进 fp32 累加器后写回。它<b>同时完成 unpermute 与 topk 加权求和</b> —— 所以 <code>finalize_weight_and_reduce_impl</code> 返回 <code>TopKWeightAndReduceNoOP()</code>。</li>
+  </ul>
+  <p style="font-size:14px;color:var(--ink-2)">这三个算子<b>只服务 <code>DeepGemmExperts</code></b>。走 FlashInfer TRTLLM（Monolithic，路由与重排都在 flashinfer kernel 内部）时完全不会触及 —— 也就是说，<b>Qwen3.6 在 B200 的默认部署下根本走不到这一节</b>。</p>
+
+  <h4>6.2 M_sum 膨胀与 padding 跳过 <span style="color:var(--ink-3);font-weight:400">（1.5′ · 这个数字很抓人）</span></h4>
+  <p><code>M_sum</code> 不等于 <code>M × topk</code>，而是 <code>Σ_e round_up(专家 e 的 token 数, 128)</code>。以 Qwen3.6 为例（256 专家、top-8），prefill 256 个 token 时真实工作量 2048 行，而 <b><code>M_sum = 34560</code> 行 —— 接近 17 倍膨胀</b>。</p>
+  <div class="note key">
+    <span class="tag">但结论是「不慌」</span>
+    <b>膨胀只占显存，不占算力</b>：padding 行的 <code>expert_ids</code> 是 −1，DeepGEMM 跳过整个 block；三个 Triton 算子的工作量也都与真实 token 数成正比，与 <code>M_sum</code> 无关。
+  </div>
+</section>
+
+<section class="sec" id="s7">
+  <div class="sec-hd"><span class="num">7</span><h3>运行时还有判定吗</h3><span class="dur">3′</span></div>
+  <p class="line">「回到主旨那句话，做个诚实的补充：<b>有一处例外。</b>」</p>
+  <div class="two">
+    <div class="box d"><div class="bt">dense · 没有</div>
+      <p style="font-size:14px;margin:0">构造期定死之后，<code>apply_weights</code> 只是照着调。</p></div>
+    <div class="box m"><div class="bt">MoE · 只有 FallbackExperts 系列</div>
+      <p style="font-size:14px;margin:0">静态门禁是 <b>AND</b>（两个子实现都要支持才会被选中），运行期再按输入 shape 二选一。</p></div>
+  </div>
+<pre><code># TritonOrDeepGemmExperts._select_experts_impl   triton_deep_gemm_moe.py:83
+if is_deep_gemm_e8m0_used() or _valid_deep_gemm(hidden_states, w1, w2):
+    return self.experts            # DeepGemmExperts
+return self.fallback_experts       # TritonExperts</code></pre>
+  <div class="note trap">
+    <span class="tag">这是一个非常值得讲的陷阱</span>
+    <b>前半句默认为真</b>（Blackwell + 装了 deep_gemm + <code>VLLM_USE_DEEP_GEMM_E8M0</code> 默认开），会把后面整串形状检查<b>短路掉</b>。<br>
+    这对 Qwen3.6 很关键：<code>_valid_deep_gemm</code> 里有一条 <code>N &lt;= 512 直接返回 False</code>，而这份权重的 <code>w2</code> 是 <code>[256, 2048, 512]</code>、<b>N 正好是 512</b> —— <b>默认配置下被短路了；一旦把 <code>VLLM_USE_DEEP_GEMM_E8M0</code> 置 0，每次 forward 都会回退到 <code>TritonExperts</code>。</b><br>
+    也就是说：<b>关掉 E8M0 不只是「换个 scale 格式」，还会顺带换掉整个 MoE experts 实现。</b>
+  </div>
+</section>
+
+<!-- ========== 收尾 ========== -->
+<div class="act"><h2>收尾</h2><span class="dur">6 分钟</span></div>
+
+<section class="sec" id="s8">
+  <div class="sec-hd"><span class="num">8</span><h3>结论矩阵与线上排查</h3><span class="dur">4′</span></div>
+  <p class="line">「前面都是机制，这一页是可以直接带走用的。」</p>
+
+  <h4>8.1 结论矩阵 —— 各设备实际落到哪个后端</h4>
+  <div class="tw"><table>
+    <tr><th>设备 / 并行</th><th>dense Linear</th><th>routed MoE</th></tr>
+    <tr><td>Hopper H100/H800，TP only</td><td>FlashInfer+DeepGEMM；未装 FlashInfer 则 DeepGEMM</td><td><b>TritonExperts</b>（oracle 把 TRITON 提前）</td></tr>
+    <tr><td>Hopper，EP &gt; 1</td><td>同上</td><td>FlashInfer CUTLASS</td></tr>
+    <tr style="background:var(--accent-soft)"><td><b>Blackwell B200（SM100）</b></td><td><b>CUTLASS blockwise</b></td><td><b>FlashInfer TRTLLM（Monolithic）</b></td></tr>
+    <tr><td>RTX 50 系（SM120）</td><td>CUTLASS blockwise</td><td>DeepGEMM（FI-TRTLLM 只认 SM100）</td></tr>
+    <tr><td>Ada 4090 / L40S（SM89）</td><td>Triton block scaled</td><td>TritonExperts</td></tr>
+    <tr><td>任意 H/B + <code>VLLM_USE_DEEP_GEMM=1</code></td><td>H 是 DeepGEMM；<b>B 仍是 CUTLASS</b></td><td>DeepGEMM</td></tr>
+  </table></div>
+
+  <h4>8.2 怎么确认线上实际走了哪条路</h4>
+<pre><code>"Selected %s for %s"                                        kernels/linear/__init__.py:600
+    → dense kernel 名。注意 scope="global"，全进程只打一条，不是每层一条
+"Using ... Fp8 MoE backend out of potential backends: [...]" oracle/fp8.py
+"Auto-disabled DeepGemm for model_type=%s on Blackwell ..."  config/vllm.py:940
+"DeepGemm disabled for N &lt;= 512 ..."（debug 级）              experts/deep_gemm_moe.py:89</code></pre>
+  <p>要确认<b>具体某一层</b>用了什么，只能起服务后打印：</p>
+<pre><code>m = llm.llm_engine.model_executor.driver_worker.model_runner.model
+lin = m.model.layers[0].linear_attn.in_proj_qkvz
+print(type(lin.quant_method).__name__, type(lin.quant_method.fp8_linear).__name__)
+
+qm = m.model.layers[3].mlp.experts.routed_experts.quant_method
+print(type(qm).__name__, getattr(qm, "fp8_backend", None) or qm.old_quant_method.fp8_backend)</code></pre>
+</section>
+
+<section class="sec" id="s9">
+  <div class="sec-hd"><span class="num">9</span><h3>五条常见误解 · 收束</h3><span class="dur">2′</span></div>
+  <p class="line">「最后用五条误解把全场串一遍 —— 每一条都对应前面的一段。」</p>
+  <div class="tw"><table>
+    <tr><th style="width:44%">误解</th><th>纠正</th><th style="white-space:nowrap">对应</th></tr>
+    <tr><td>「装了 DeepGEMM 就在用 DeepGEMM」</td><td>dense 与 MoE 分别决定，Qwen3.6 on SM100 恰好是 dense 不用、MoE 可能用</td><td>第 0/3 段</td></tr>
+    <tr><td>「<code>o_proj</code> 和 shared expert 属于 MoE」</td><td>都属于 dense 路径</td><td>第 1 段</td></tr>
+    <tr><td>「<code>--linear-backend deep_gemm</code> 能强制用 DeepGEMM」</td><td>语义是「缩小候选范围」，被留下的候选仍要过三道门；过不了就<b>启动失败</b>，不会回退</td><td>第 3 段</td></tr>
+    <tr><td>「N/K 没对齐所以选不上 DeepGEMM」</td><td>block-FP8 权重建层时先要过 <code>validate_fp8_block_shape</code> 的 128 对齐检查，比 DeepGEMM 的 64/128 更严，不满足根本走不到 kernel 选择 —— 这个方向可以直接排除</td><td>第 3 段</td></tr>
+    <tr><td>「换 GEMM 后端能让激活量化变快」</td><td>两条分支底层是同一批 csrc 算子</td><td>第 5 段</td></tr>
+  </table></div>
+  <div class="note key" style="margin-top:20px">
+    <span class="tag">收束句 —— 回到开场</span>
+    <b>初始化定型，运行时执行。</b>所以调优、排查、复现问题，全部应该从<b>启动日志</b>入手，而不是从 profile 里的 kernel 名倒推。<br>
+    对 Qwen3.6 on B200 这个具体组合：<b>dense 走 CUTLASS 且权重零改动，MoE 走 FlashInfer TRTLLM</b> —— 这是当前分支上唯一正确的默认行为，不是配置问题。
+  </div>
+</section>
+
+<section class="sec" id="qa">
+  <div class="sec-hd"><span class="num">Q&amp;A</span><h3>预期提问与回答预案</h3><span class="dur">10′</span></div>
+  <p class="line">「以下八问按被问到的概率排序，前四条建议提前想好一句话版本。」</p>
+
+  <details class="qa"><summary>我们在 B200 上装了 DeepGEMM，为什么日志显示 dense 在用 CUTLASS？是不是装错了？</summary>
+    <div class="body"><p>不是。这是 <code>52069012f</code>（#38083）引入的 Blackwell 模型黑名单，Qwen3.5/3.6 的 <code>text_config.model_type</code> 在名单里。原因是 DeepGEMM 在 Blackwell 上要求 UE8M0 scale，加载期重量化会把权重的相对量化误差放大约 1.37×，gsm8k 上实测掉点。<b>三条常见的绕开尝试都无效</b>：<code>VLLM_USE_DEEP_GEMM=1</code>（真正生效的判定在 <code>can_implement</code> 里，不读这个）、<code>VLLM_USE_DEEP_GEMM_E8M0=0</code>、<code>--linear-backend deep_gemm</code>（会导致启动失败而非回退）。</p></div></details>
+
+  <details class="qa"><summary>那 MoE 侧走 DeepGEMM 精度不会掉吗？为什么不一起加黑名单？</summary>
+    <div class="body"><p>诚实的回答是：<b>没有人评估过</b>。那次修复的作用域从一开始就只覆盖 dense —— 提交里改动的文件不含任何 MoE 代码，<code>Fp8MoEMethod</code> 一次都没读过 <code>use_deep_gemm</code>。之所以没问题，是因为 <b>B200 默认根本不会让 MoE 落到 DeepGEMM</b>（<code>FLASHINFER_TRTLLM</code> 优先级更高）。<br>所以实践建议是：<b>如果你刻意把 MoE 逼到 DeepGEMM，请自己先跑一遍精度评测</b>，那条路没有评测覆盖也没有黑名单保护。</p></div></details>
+
+  <details class="qa"><summary>为什么不能只把 scale 改成 2 的幂，非要整段反量化再重量化？</summary>
+    <div class="body"><p>因为 fp8 尾数是按<b>旧 scale</b> 算出来的。只换 scale 不动尾数，等于把整个 block 的数值统一乘上一个 <code>new/old</code> 的倍数（实测均值 1.33），<b>数值整体偏移</b>。正确做法是先用旧 scale 还原到 fp32 数值域，再按新的 2 的幂 scale 重新取整 —— 这样误差只来自一次重新舍入，是最小的。</p></div></details>
+
+  <details class="qa"><summary>UE8M0 打包省了 3/4 的 scale 存储，为什么还说它是「代价」？</summary>
+    <div class="body"><p>省的是<b>带宽和存储</b>，代价是<b>动态范围</b>。scale 上取整到 2 的幂之后，一个 block 的 amax 只能映射到 256（<code>2^8</code>）而不是 E4M3 的最大值 448，上端白白让出至多 1 bit。实测 <code>|wq|.max</code> 从 448 掉到 416 或 448（取决于块），相对量化误差 0.02250 → 0.03074。<br>对多数模型这点损失可接受 —— 换来的是 MMA 流水内零指令的指数加。Qwen3.5/3.6 这个架构扛不住，才有了黑名单。</p></div></details>
+
+  <details class="qa"><summary>激活的 group shape 能不能调？比如改成 [1,64] 减小误差？</summary>
+    <div class="body"><p>不能，它<b>不是独立配置项</b>。<code>fp8.py:307</code> 直接拿 <code>weight_block_size[0]</code> 构造激活的 group shape。数学上也必须相等：GEMM 按 128 切 K 片，片内反量化因子要能提到求和号外面，前提是片内 As、Bs 都是常数。要改只能改 checkpoint 的 <code>weight_block_size</code>，那是重新量化模型的事。</p></div></details>
+
+  <details class="qa"><summary>Qwen3.6 的 M_sum 有 17 倍膨胀，是不是性能瓶颈？</summary>
+    <div class="body"><p>不是算力瓶颈。padding 行的 <code>expert_ids</code> 是 −1，DeepGEMM 的 scheduler 见负数就整块跳过；三个 Triton 算子的工作量也都与真实 token 数成正比。<b>膨胀只占显存</b>。而且这条路只在走 <code>DeepGemmExperts</code> 时存在 —— B200 默认走 FlashInfer TRTLLM Monolithic，路由和重排都在 flashinfer kernel 内部，压根没有这个布局。</p></div></details>
+
+  <details class="qa"><summary>为什么 <code>VLLM_USE_DEEP_GEMM=1</code> 和「默认开着」不一样？</summary>
+    <div class="body"><p>MoE 侧那个覆盖开关的判据是 <code>envs.is_set()</code>，即「用户有没有<b>显式 export 过</b>这个变量」，而不是它的值是不是真。没 export 时走正常的优先级选择流程；export 之后走 S2–S6 的硬覆盖分支 —— <b>先到先得、命中即返回、不支持就直接抛错不回退</b>。这两条是完全不同的代码路径。</p></div></details>
+
+  <details class="qa"><summary>这些结论怎么验证？是读代码推的还是跑出来的？</summary>
+    <div class="body"><p>分三类：<br><b>① 代码事实</b>（候选表顺序、门禁条件、行号）—— 读 <code>v0.25.1-self</code> 分支源码。<br><b>② checkpoint 事实</b>（648 项、权重形状、scale 值）—— 读 <code>config.json</code> 与 safetensors 头，脚本 <code>scripts/inspect_real_weight.py</code>，含逐字节 E4M3 位域解码验证。<br><b>③ 数值实测</b>（误差放大 1.366×）—— 直接调用仓库里的 <code>requant_weight_ue8m0_inplace</code>（非复刻）对真实形状权重跑，脚本 <code>scripts/demo_requant_ue8m0.py</code>，只依赖 safetensors 和 CPU torch，任何机器可复现。<br>文中明确标注了哪些是<b>推断而非实测</b> —— 比如「MoE 误差暴露面更小」那条。</p></div></details>
+
+  <div class="ref" style="margin-top:22px">
+    <b>延伸材料（会后发）：</b>
+    <a href="fp8_quantization_workflow_qwen36.md">本讲的完整讲稿</a> ·
+    <a href="../fp8_backend_selection_qwen36.md">参考手册版（候选表全条目、门禁实现、接口清单）</a> ·
+    <a href="../fp8_quantization_kernels.md">FP8 量化原理与 csrc 算子地图</a> ·
+    <a href="../quantization_dispatch.md">量化识别与分发</a> ·
+    <a href="scripts/">可复现脚本</a>
+  </div>
+</section>
+
+<p style="text-align:center;color:var(--ink-3);font-size:12.5px;margin:60px 0 0">
+所有行号与结论以分支 <code>v0.25.1-self</code> 为准 · 图片来自 <code>images/</code>
+</p>
+
+</main>
+</div>
+
+<div id="lb"><img alt=""></div>
+
+<script>
+// theme toggle
+const root=document.documentElement;
+document.getElementById('tg').onclick=()=>{
+  const cur=root.getAttribute('data-theme');
+  const dark=cur? cur==='dark' : matchMedia('(prefers-color-scheme: dark)').matches;
+  root.setAttribute('data-theme', dark?'light':'dark');
+};
+// expand/collapse all Q&A
+const ex=document.getElementById('ex');
+ex.onclick=()=>{
+  const ds=[...document.querySelectorAll('details.qa')];
+  const open=ds.every(d=>d.open);
+  ds.forEach(d=>d.open=!open);
+  ex.textContent=open?'展开 Q&A':'收起 Q&A';
+};
+// lightbox
+const lb=document.getElementById('lb'), lbi=lb.querySelector('img');
+document.querySelectorAll('figure img').forEach(im=>im.onclick=()=>{lbi.src=im.src;lb.classList.add('on')});
+lb.onclick=()=>lb.classList.remove('on');
+addEventListener('keydown',e=>{if(e.key==='Escape')lb.classList.remove('on')});
+// scroll spy
+const links=[...document.querySelectorAll('#nav a')];
+const map=new Map(links.map(a=>[a.getAttribute('href').slice(1),a]));
+const io=new IntersectionObserver(es=>{
+  es.forEach(e=>{
+    if(e.isIntersecting){
+      links.forEach(a=>a.classList.remove('on'));
+      map.get(e.target.id)?.classList.add('on');
+    }
+  });
+},{rootMargin:'-12% 0px -70% 0px'});
+document.querySelectorAll('section.sec').forEach(s=>io.observe(s));
+</script>
+</body>
+</html>

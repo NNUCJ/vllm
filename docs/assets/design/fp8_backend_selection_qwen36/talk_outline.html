@@ -1,0 +1,719 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Qwen3.6 FP8 分享大纲</title>
+<meta name="description" content="把 vLLM FP8 设计文档讲成 60 分钟的分享大纲：七段时间分配、每段主线与配图、讲者备忘与砍时间方案。">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap">
+<style>
+:root {
+  --ground:      #F4F5F7;
+  --surface:     #FFFFFF;
+  --surface-sub: #EDEFF3;
+  --ink:         #14161B;
+  --ink-2:       #3D434F;
+  --ink-3:       #6B7280;
+  --ink-4:       #9AA1AC;
+  --rule:        #DDE0E6;
+  --rule-soft:   #E8EAEF;
+
+  --c-intro:  #6B7280;
+  --c-init:   #6B4FBF;
+  --c-run:    #B5651D;
+  --c-theory: #2A6E8F;
+  --c-case:   #A83B4C;
+
+  --code-bg:   #EDEFF3;
+  --code-ink:  #2B3038;
+
+  --sans: "IBM Plex Sans", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans SC", system-ui, sans-serif;
+  --mono: "IBM Plex Mono", "SFMono-Regular", "Menlo", "Consolas", monospace;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --ground:      #101216;
+    --surface:     #171A20;
+    --surface-sub: #1D2128;
+    --ink:         #E9EBEF;
+    --ink-2:       #BCC2CC;
+    --ink-3:       #8B93A0;
+    --ink-4:       #666E7B;
+    --rule:        #2A2F38;
+    --rule-soft:   #22262D;
+
+    --c-intro:  #8B93A0;
+    --c-init:   #A98DFF;
+    --c-run:    #E29A44;
+    --c-theory: #63B4D8;
+    --c-case:   #E2798C;
+
+    --code-bg:   #1D2128;
+    --code-ink:  #CBD1DA;
+  }
+}
+
+:root[data-theme="dark"] {
+  --ground:      #101216;
+  --surface:     #171A20;
+  --surface-sub: #1D2128;
+  --ink:         #E9EBEF;
+  --ink-2:       #BCC2CC;
+  --ink-3:       #8B93A0;
+  --ink-4:       #666E7B;
+  --rule:        #2A2F38;
+  --rule-soft:   #22262D;
+
+  --c-intro:  #8B93A0;
+  --c-init:   #A98DFF;
+  --c-run:    #E29A44;
+  --c-theory: #63B4D8;
+  --c-case:   #E2798C;
+
+  --code-bg:   #1D2128;
+  --code-ink:  #CBD1DA;
+}
+
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+
+body {
+  margin: 0;
+  background: var(--ground);
+  color: var(--ink);
+  font-family: var(--sans);
+  font-size: 15px;
+  line-height: 1.72;
+  -webkit-font-smoothing: antialiased;
+}
+
+.page {
+  max-width: 940px;
+  margin: 0 auto;
+  padding: 56px 28px 96px;
+  display: flex;
+  flex-direction: column;
+  gap: 44px;
+}
+
+/* ---------- theme toggle ---------- */
+
+.theme-toggle {
+  position: fixed;
+  top: 16px;
+  right: 16px;
+  z-index: 10;
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  background: var(--surface);
+  border: 1px solid var(--rule);
+  border-radius: 3px;
+  padding: 6px 11px;
+  cursor: pointer;
+  line-height: 1;
+}
+.theme-toggle:hover { color: var(--ink); border-color: var(--ink-4); }
+
+/* ---------- masthead ---------- */
+
+.masthead { display: flex; flex-direction: column; gap: 18px; }
+
+.eyebrow {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  font-weight: 500;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+
+h1 {
+  font-size: clamp(28px, 4.4vw, 38px);
+  line-height: 1.24;
+  font-weight: 600;
+  letter-spacing: -0.015em;
+  margin: 0;
+  text-wrap: balance;
+}
+
+.thesis {
+  font-size: 17px;
+  line-height: 1.68;
+  color: var(--ink-2);
+  max-width: 62ch;
+  margin: 0;
+  border-left: 2px solid var(--c-case);
+  padding-left: 16px;
+}
+.thesis b { color: var(--ink); font-weight: 600; }
+
+.factbar {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(148px, 1fr));
+  gap: 1px;
+  background: var(--rule);
+  border: 1px solid var(--rule);
+  border-radius: 3px;
+  overflow: hidden;
+  margin: 0;
+}
+.fact { background: var(--surface); padding: 12px 14px; display: flex; flex-direction: column; gap: 3px; }
+.fact dt {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ink-4);
+}
+.fact dd { margin: 0; font-size: 14px; font-weight: 500; color: var(--ink); }
+.fact dd .sub { display: block; font-size: 12.5px; font-weight: 400; color: var(--ink-3); }
+
+/* ---------- generic section ---------- */
+
+section > h2 {
+  font-size: 12px;
+  font-family: var(--mono);
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  margin: 0 0 16px;
+  padding-bottom: 9px;
+  border-bottom: 1px solid var(--rule);
+}
+
+/* ---------- hooks ---------- */
+
+.hooks { display: grid; gap: 10px; }
+
+.hook {
+  background: var(--surface);
+  border: 1px solid var(--rule-soft);
+  border-radius: 3px;
+  padding: 14px 16px 14px 15px;
+  border-left: 3px solid var(--c-case);
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 4px 12px;
+  align-items: baseline;
+}
+.hook .q { font-weight: 600; color: var(--ink); grid-column: 2; }
+.hook .a { color: var(--ink-2); font-size: 14px; grid-column: 2; }
+.hook .n {
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--c-case);
+  grid-row: 1 / span 2;
+}
+
+/* ---------- agenda ---------- */
+
+.agenda { display: flex; flex-direction: column; gap: 14px; }
+
+.seg {
+  background: var(--surface);
+  border: 1px solid var(--rule-soft);
+  border-radius: 3px;
+  border-left: 3px solid var(--rail, var(--c-intro));
+  padding: 18px 20px 18px 19px;
+  display: grid;
+  grid-template-columns: 76px 1fr;
+  gap: 6px 20px;
+}
+.seg[data-rail="intro"]  { --rail: var(--c-intro); }
+.seg[data-rail="init"]   { --rail: var(--c-init); }
+.seg[data-rail="run"]    { --rail: var(--c-run); }
+.seg[data-rail="theory"] { --rail: var(--c-theory); }
+.seg[data-rail="case"]   { --rail: var(--c-case); }
+
+.seg .clock {
+  grid-row: 1 / span 4;
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--rail);
+  padding-top: 3px;
+  line-height: 1.5;
+}
+.seg .clock .dur {
+  display: block;
+  font-size: 10.5px;
+  font-weight: 400;
+  color: var(--ink-4);
+  letter-spacing: 0.06em;
+}
+
+.seg h3 {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  line-height: 1.4;
+  text-wrap: balance;
+}
+
+.seg .src {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--ink-4);
+  letter-spacing: 0.02em;
+}
+
+.seg ul { margin: 6px 0 0; padding-left: 17px; display: flex; flex-direction: column; gap: 5px; }
+.seg li { color: var(--ink-2); }
+.seg li b, .seg li strong { color: var(--ink); font-weight: 600; }
+
+.landing {
+  margin-top: 10px;
+  padding: 9px 12px;
+  background: var(--surface-sub);
+  border-radius: 2px;
+  font-size: 14px;
+  color: var(--ink-2);
+}
+.landing::before {
+  content: "落点";
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  color: var(--ink-4);
+  margin-right: 9px;
+}
+
+/* ---------- inline bits ---------- */
+
+code {
+  font-family: var(--mono);
+  font-size: 0.88em;
+  background: var(--code-bg);
+  color: var(--code-ink);
+  padding: 1.5px 5px;
+  border-radius: 2px;
+}
+
+.ref {
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.03em;
+  color: var(--ink-3);
+  background: var(--surface-sub);
+  border: 1px solid var(--rule-soft);
+  padding: 1px 6px;
+  border-radius: 2px;
+  white-space: nowrap;
+  text-decoration: none;
+}
+a.ref:hover { color: var(--ink); border-color: var(--ink-4); }
+
+.num {
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+/* ---------- cards ---------- */
+
+.cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 12px; }
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--rule-soft);
+  border-radius: 3px;
+  padding: 16px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+.card h4 { margin: 0; font-size: 14px; font-weight: 600; letter-spacing: -0.005em; }
+.card ul { margin: 0; padding-left: 17px; display: flex; flex-direction: column; gap: 5px; }
+.card li { font-size: 14px; color: var(--ink-2); }
+.card p { margin: 0; font-size: 14px; color: var(--ink-2); }
+
+/* ---------- figure strip ---------- */
+
+.figs {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(168px, 1fr));
+  gap: 12px;
+}
+.fig {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  text-decoration: none;
+  color: inherit;
+  background: var(--surface);
+  border: 1px solid var(--rule-soft);
+  border-radius: 3px;
+  padding: 9px;
+}
+.fig:hover { border-color: var(--ink-4); }
+.fig img {
+  width: 100%;
+  height: 104px;
+  object-fit: cover;
+  object-position: top left;
+  background: #fff;
+  border: 1px solid var(--rule-soft);
+  border-radius: 2px;
+  display: block;
+}
+.fig .cap { font-size: 12.5px; line-height: 1.45; color: var(--ink-2); }
+.fig .cap b {
+  display: block;
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--ink-4);
+}
+
+/* ---------- QA ---------- */
+
+.qa { display: flex; flex-direction: column; gap: 1px; background: var(--rule); border: 1px solid var(--rule); border-radius: 3px; overflow: hidden; }
+.qa-row { background: var(--surface); padding: 13px 16px; display: grid; grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.3fr); gap: 6px 22px; align-items: start; }
+.qa-row .q { font-weight: 600; font-size: 14px; color: var(--ink); }
+.qa-row .a { font-size: 14px; color: var(--ink-2); }
+@media (max-width: 620px) { .qa-row { grid-template-columns: 1fr; } }
+
+/* ---------- code block ---------- */
+
+pre {
+  margin: 0;
+  background: var(--code-bg);
+  color: var(--code-ink);
+  border: 1px solid var(--rule-soft);
+  border-radius: 3px;
+  padding: 14px 16px;
+  overflow-x: auto;
+  font-family: var(--mono);
+  font-size: 12.5px;
+  line-height: 1.66;
+}
+pre code { background: none; padding: 0; font-size: inherit; }
+pre .cm { color: var(--ink-4); }
+
+/* ---------- cut plan ---------- */
+
+.cut { display: flex; flex-direction: column; gap: 1px; background: var(--rule); border: 1px solid var(--rule); border-radius: 3px; overflow: hidden; }
+.cut-row { background: var(--surface); padding: 11px 16px; display: grid; grid-template-columns: 88px 1fr; gap: 16px; align-items: baseline; }
+.cut-row .tag { font-family: var(--mono); font-size: 11px; letter-spacing: 0.06em; color: var(--ink-4); text-transform: uppercase; }
+.cut-row .body { font-size: 14px; color: var(--ink-2); }
+.cut-row .body b { color: var(--ink); font-weight: 600; }
+
+/* ---------- footer ---------- */
+
+footer {
+  border-top: 1px solid var(--rule);
+  padding-top: 18px;
+  font-size: 13px;
+  color: var(--ink-3);
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+footer code { font-size: 12px; }
+
+a { color: inherit; }
+:focus-visible { outline: 2px solid var(--c-theory); outline-offset: 2px; border-radius: 2px; }
+@media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+
+/* ---------- print ---------- */
+
+@media print {
+  :root {
+    --ground: #fff; --surface: #fff; --surface-sub: #f2f2f2;
+    --ink: #000; --ink-2: #222; --ink-3: #555; --ink-4: #777;
+    --rule: #bbb; --rule-soft: #ccc; --code-bg: #f2f2f2; --code-ink: #222;
+  }
+  body { font-size: 10.5pt; line-height: 1.5; }
+  .page { max-width: none; padding: 0; gap: 22px; }
+  .theme-toggle, .figs { display: none; }
+  .seg, .hook, .card, .qa-row, .cut-row { break-inside: avoid; }
+  section > h2 { break-after: avoid; }
+}
+</style>
+</head>
+<body>
+
+<button class="theme-toggle" id="themeToggle" type="button">切换主题</button>
+
+<div class="page">
+
+  <header class="masthead">
+    <div class="eyebrow">技术分享 · 大纲</div>
+    <h1>vLLM FP8 量化链路，与 Qwen3.6 在 Blackwell 上的真实落点</h1>
+    <p class="thesis">
+      一条主线贯穿全场：<b>配置对象只描述 checkpoint，硬件决策全在 quant_method 的构造函数里</b>；
+      而 dense 与 MoE 的这两个构造函数<b>互不共享一行代码</b>。
+      听众带走的应该是一张能自己推演的决策图，而不是一条「SM100 上用 CUTLASS」的结论。
+    </p>
+
+    <dl class="factbar">
+      <div class="fact"><dt>时长</dt><dd>60 分钟<span class="sub">正文 55 + Q&amp;A 5</span></dd></div>
+      <div class="fact"><dt>受众</dt><dd>推理引擎 / 量化<span class="sub">读过 vLLM 代码即可</span></dd></div>
+      <div class="fact"><dt>前置</dt><dd>FP8 数值格式<span class="sub">不熟可先读姊妹篇</span></dd></div>
+      <div class="fact"><dt>材料</dt><dd>设计文档 6 章<span class="sub">16 图 · 29 表 · 3 附录</span></dd></div>
+      <div class="fact"><dt>代码基线</dt><dd>v0.25.1-self<span class="sub">行号全部以此为准</span></dd></div>
+    </dl>
+  </header>
+
+  <section>
+    <h2>开场：三个问题，先不给答案</h2>
+    <div class="hooks">
+      <div class="hook">
+        <span class="n">Q1</span>
+        <span class="q">机器上装了 DeepGEMM，为什么 dense 层在跑 CUTLASS？</span>
+        <span class="a">答案在第 7 段落地，中间五段都是为了让这个答案可被自己推导出来。</span>
+      </div>
+      <div class="hook">
+        <span class="n">Q2</span>
+        <span class="q">同一份权重，Hopper 上 MoE 走 Triton、Blackwell 走 FlashInfer——谁做的决定？</span>
+        <span class="a">不是环境变量，是候选表的一次重排。第 4 段揭晓。</span>
+      </div>
+      <div class="hook">
+        <span class="n">Q3</span>
+        <span class="q"><code>o_proj</code> 和 shared expert，算 dense 还是 MoE？</span>
+        <span class="a">全场最常见的误归类。第 2 段用一张图讲完。</span>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>正文七段</h2>
+    <div class="agenda">
+
+      <article class="seg" data-rail="intro">
+        <div class="clock">00–05<span class="dur">5 min</span></div>
+        <h3>1 · 开场与地图</h3>
+        <div class="src">对应报告 1.1–1.2 · 图 15（总流程）</div>
+        <ul>
+          <li>抛出上面三个问题，明确今天<strong>不讲</strong> FP8 数值格式本身（有姊妹篇）。</li>
+          <li>先给全景图 <a class="ref" href="overview.png">图 15</a>，让听众知道后面每一段在整张图的哪个位置。</li>
+          <li>宣布结构：初始化 → 运行时 → 原理 → 案例，前三段都是为第四段服务。</li>
+        </ul>
+        <div class="landing">今天要回答的是「谁在什么时候做了选择」，不是「哪个 kernel 更快」。</div>
+      </article>
+
+      <article class="seg" data-rail="intro">
+        <div class="clock">05–12<span class="dur">7 min</span></div>
+        <h3>2 · 地基：dense 与 MoE 是两条完全独立的路</h3>
+        <div class="src">对应报告 1.3 · 图 1、图 2 · 表 1</div>
+        <ul>
+          <li>用 <a class="ref" href="qwen36_quantized_layer_map.png">图 1</a> 走一遍 Qwen3.6 一层的数据流——层名、shape、dtype 都是实测值，不是示意。</li>
+          <li>三色图例当场解决 Q3：<b>紫底走 dense、橙底走 MoE、灰底 BF16</b>；<code>o_proj</code> 与 shared expert 是紫的。</li>
+          <li>解释为什么 <code>in_proj_a/b</code> 保持 BF16 而 <code>in_proj_z</code> 被量化——<span class="num">32×2048</span> 的门控标量 vs <span class="num">4096×2048</span> 的大矩阵乘。</li>
+          <li><span class="ref">表 1</span> 把两条路的入口、候选表、选择算法、覆盖开关并排列出。</li>
+        </ul>
+        <div class="landing">「装了 DeepGEMM 就是在用 DeepGEMM」这个推断不成立，必须分两条路各验一次。</div>
+      </article>
+
+      <article class="seg" data-rail="init">
+        <div class="clock">12–20<span class="dur">8 min</span></div>
+        <h3>3 · 初始化（上）：一个配置对象，服务全部层</h3>
+        <div class="src">对应报告 2.1–2.2 · 图 3、图 4、图 5、图 6 · 表 5、表 6、表 9</div>
+        <ul>
+          <li><code>config.json</code> → <code>Fp8Config</code> 的五步 <a class="ref" href="quant_config_build.png">图 3</a>；<span class="ref">表 5</span> 顺带给出全部 30 个 <code>quant_method</code> 字符串到 21 个配置类的映射。</li>
+          <li>核心一句：<b>进程级唯一、按引用共享、全程不复制</b>。差异化全靠 <code>get_quant_method(layer, prefix)</code> 的两个入参。</li>
+          <li>三类例外 <span class="ref">表 6</span>：显式 <code>quant_config=None</code>（router）、<code>ignored_layers</code> 命中（648 项）、投机解码 draft 模型另建一份。</li>
+          <li>强调 <b>kernel 选择不在 <code>get_quant_method</code> 里</b>，而在后面的 <code>create_weights</code> / <code>__init__</code>——<a class="ref" href="dense_kernel_pick_workflow.png">图 5</a> 把这一步拆成 A–F 六段，结论是「选后端」最终只落在 <code>apply_block_scaled_mm</code> 一个抽象方法上。</li>
+        </ul>
+        <div class="landing">配置对象里没有一个字段知道你在哪张卡上。</div>
+      </article>
+
+      <article class="seg" data-rail="init">
+        <div class="clock">20–30<span class="dur">10 min</span></div>
+        <h3>4 · 初始化（下）：两套后端选择算法</h3>
+        <div class="src">对应报告 2.3–2.5 · 图 7、图 8 · 表 10、表 12–14</div>
+        <ul>
+          <li><b>dense：</b>静态候选表 + 三道门禁，第一个通过者胜出，构造期定死 <a class="ref" href="dense_backend_tree.png">图 7</a><span class="ref">表 10</span>。</li>
+          <li><b>MoE：</b>先重排候选表、再过五个硬覆盖开关、最后 11 道检查 <a class="ref" href="moe_backend_tree.png">图 8</a>。</li>
+          <li>Q2 在此揭晓：<span class="ref">表 13</span> 第三条——<b>单机 TP 的 SM90 上，TRITON 被显式提到 DeepGEMM 之前</b>。</li>
+          <li>两个反直觉细节：<code>--linear-backend</code> 过滤后为空<b>直接报错不回退</b>；<code>VLLM_USE_DEEP_GEMM</code> 判据是 <code>is_set()</code>，「默认开」与「显式设 1」是两种行为。</li>
+          <li>收尾 <code>process_weights_after_loading</code>：后端差异第一次落到权重字节上。</li>
+        </ul>
+        <div class="landing">dense 看形状，MoE 看并行配置——同一份权重换个 EP 就换后端。</div>
+      </article>
+
+      <article class="seg" data-rail="run">
+        <div class="clock">30–37<span class="dur">7 min</span></div>
+        <h3>5 · 运行时：dense 三步、MoE 六步</h3>
+        <div class="src">对应报告 3.1–3.3 · 图 9、图 10、图 11</div>
+        <ul>
+          <li>dense 三步里只有中间一步换后端，<b>激活量化两条路共用同一批 csrc 算子</b>——换 GEMM 不会让量化变快。</li>
+          <li><a class="ref" href="quant_fp8_block_workflow.png">图 10</a> 讲清 <code>[1,128]</code> 与 <code>[128,128]</code> 的粒度耦合：片内 scale 为常数，反量化因子才能提出求和号。</li>
+          <li>MoE 六步 <a class="ref" href="moe_runtime.png">图 11</a>，重点是 <code>M_sum</code>：Qwen3.6 prefill 256 token 时真实 <span class="num">2048</span> 行、<code>M_sum</code> 却是 <span class="num">34560</span> 行，<b>≈17 倍膨胀只占显存不占算力</b>（padding 行 <code>expert_ids = −1</code> 被跳过）。</li>
+          <li>唯一的运行期重判定：<code>TritonOrDeepGemmExperts</code> 每次 forward 二选一。</li>
+        </ul>
+        <div class="landing">dense 构造期定死，MoE 只有 Fallback 系列会逐次重判。</div>
+      </article>
+
+      <article class="seg" data-rail="theory">
+        <div class="clock">37–45<span class="dur">8 min</span></div>
+        <h3>6 · 原理：UE8M0 与 fp32 是两条反量化通路</h3>
+        <div class="src">对应报告 4.1–4.3 · 图 12、图 13 · 表 18</div>
+        <ul>
+          <li>数学起点：<b>乘 2 的幂只改指数域、不动尾数</b>，不需要乘法器且逐位精确。</li>
+          <li>DeepGEMM 走硬件通路——scale 作为 E8M0 字节进 <code>tcgen05</code> block-scaled MMA；CUTLASS 走软件通路——<code>ElementBlockScale = float</code>，在 CUDA core 上做 promotion <a class="ref" href="ue8m0_vs_fp32_scale.png">图 12</a>。</li>
+          <li>代价：scale 上取整到 2ⁿ，block amax 只能映射到 <span class="num">256</span> 而非 <span class="num">448</span>，上端最多让出 1 bit 动态范围。附录 B 实测<b>量化误差放大 ×1.37</b>。</li>
+          <li>一句话对比 <span class="ref">表 18</span>：<b>DeepGEMM 的能力边界在运行期（JIT），CUTLASS 的在编译期（AOT）</b>。</li>
+        </ul>
+        <div class="landing">这 1 bit 就是下一段黑名单的全部根因。</div>
+      </article>
+
+      <article class="seg" data-rail="case">
+        <div class="clock">45–55<span class="dur">10 min</span></div>
+        <h3>7 · 案例：Qwen3.6-35B-A3B-FP8 在 SM100 上</h3>
+        <div class="src">对应报告 5.1–5.5、6 · 图 16 · 表 23–29</div>
+        <ul>
+          <li>Q1 揭晓，三个候选逐个落选 <a class="ref" href="qwen36_dense_deepgemm_gate.png">图 16</a>：FlashInfer 的 block kernel <b>只有 SM90 版本</b>；DeepGEMM 通过了全部形状检查，<b>只栽在模型黑名单</b> <span class="ref">表 23</span>。</li>
+          <li>黑名单来自实测精度回归而非理论推导——提交 <code>52069012f</code>（#38083）同时新增了 gsm8k 评测配置。</li>
+          <li>三条常见绕行全部无效 <span class="ref">表 26</span>，其中 <code>--linear-backend deep_gemm</code> 的后果是<b>启动失败</b>而非回退。</li>
+          <li>作用边界：黑名单<b>只管 dense</b>，MoE 照常走 FlashInfer TRTLLM / DeepGEMM。</li>
+          <li>结论矩阵 <span class="ref">表 28</span> 收尾，再给 <span class="ref">表 29</span> 的四条日志——听众回去就能自查线上路径。</li>
+        </ul>
+        <div class="landing">准确表述是「Qwen3.6 在 Blackwell 上无法以 DeepGEMM 执行 dense」，不是「Qwen3.6 用不了 DeepGEMM」。</div>
+      </article>
+
+    </div>
+  </section>
+
+  <section>
+    <h2>配图速查（点击看原图）</h2>
+    <div class="figs">
+      <a class="fig" href="overview.png"><img src="overview.png" alt="FP8 推理总流程"><span class="cap"><b>图 15 · 第 1 段</b>推理总流程</span></a>
+      <a class="fig" href="qwen36_quantized_layer_map.png"><img src="qwen36_quantized_layer_map.png" alt="一层的数据流与权重位置"><span class="cap"><b>图 1 · 第 2 段</b>一层数据流与权重位置</span></a>
+      <a class="fig" href="gdn_core_expanded.png"><img src="gdn_core_expanded.png" alt="Gated DeltaNet 递推核展开"><span class="cap"><b>图 2 · 第 2 段</b>GDN 递推核展开</span></a>
+      <a class="fig" href="quant_config_build.png"><img src="quant_config_build.png" alt="quant_config 构造过程"><span class="cap"><b>图 3 · 第 3 段</b>quant_config 五步构造</span></a>
+      <a class="fig" href="dense_kernel_pick_workflow.png"><img src="dense_kernel_pick_workflow.png" alt="create_weights 内部的 kernel 选择"><span class="cap"><b>图 5 · 第 3 段</b>kernel 选择流程</span></a>
+      <a class="fig" href="dense_backend_tree.png"><img src="dense_backend_tree.png" alt="dense 后端选择流程"><span class="cap"><b>图 7 · 第 4 段</b>dense 后端选择</span></a>
+      <a class="fig" href="moe_backend_tree.png"><img src="moe_backend_tree.png" alt="MoE 后端选择流程"><span class="cap"><b>图 8 · 第 4 段</b>MoE 后端选择</span></a>
+      <a class="fig" href="quant_fp8_block_workflow.png"><img src="quant_fp8_block_workflow.png" alt="QuantFP8 粒度耦合"><span class="cap"><b>图 10 · 第 5 段</b>量化粒度耦合</span></a>
+      <a class="fig" href="moe_runtime.png"><img src="moe_runtime.png" alt="MoE 运行期调用链"><span class="cap"><b>图 11 · 第 5 段</b>MoE 运行期六步</span></a>
+      <a class="fig" href="ue8m0_vs_fp32_scale.png"><img src="ue8m0_vs_fp32_scale.png" alt="UE8M0 与 fp32 两条通路"><span class="cap"><b>图 12 · 第 6 段</b>两条反量化通路</span></a>
+      <a class="fig" href="qwen36_dense_deepgemm_gate.png"><img src="qwen36_dense_deepgemm_gate.png" alt="dense 候选逐个落选"><span class="cap"><b>图 16 · 第 7 段</b>候选逐个落选</span></a>
+    </div>
+  </section>
+
+  <section>
+    <h2>现场演示：一条命令看清实际落点</h2>
+    <div class="cols">
+      <div class="card">
+        <h4>启动后打印真实选中的类</h4>
+        <pre><code>m = llm.llm_engine.model_executor \
+     .driver_worker.model_runner.model
+
+<span class="cm"># 0 号层是 linear_attention</span>
+lin = m.model.layers[0].linear_attn.in_proj_qkvz
+print(type(lin.quant_method).__name__,
+      type(lin.quant_method.fp8_linear).__name__)
+
+qm = m.model.layers[3].mlp.experts \
+      .routed_experts.quant_method
+print(type(qm).__name__,
+      getattr(qm, "fp8_backend", None)
+      or qm.old_quant_method.fp8_backend)</code></pre>
+      </div>
+      <div class="card">
+        <h4>或者只看这四条日志</h4>
+        <ul>
+          <li><code>Selected %s for %s</code> —— dense 实际选中的 kernel 类名</li>
+          <li><code>Using ... Fp8 MoE backend out of potential backends</code> —— MoE 的选中项与当次候选表</li>
+          <li><code>Auto-disabled DeepGemm for model_type=...</code> —— 命中 Blackwell 黑名单</li>
+          <li><code>DeepGemm disabled for N &lt;= 512</code>（debug 级）—— MoE 运行期回退 Triton</li>
+        </ul>
+        <p>四条日志与 <span class="ref">表 29</span> 一一对应，建议现场投一次真实启动日志。</p>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>讲者备忘：大概率会被问到</h2>
+    <div class="qa">
+      <div class="qa-row">
+        <div class="q">改 <code>VLLM_USE_DEEP_GEMM_E8M0=0</code> 不就没精度问题了？</div>
+        <div class="a">能消除根源，但黑名单<b>按 model_type 一刀切</b>、不看 scale 格式，依然命中。</div>
+      </div>
+      <div class="qa-row">
+        <div class="q">那把 <code>quant_config.use_deep_gemm</code> 改回 <code>True</code> 呢？</div>
+        <div class="a">没用。判定写在两处，真正让候选落选的是 <code>can_implement</code> 里的独立调用；改配置只会让反量化守卫失效 <span class="ref">表 25</span>。</div>
+      </div>
+      <div class="qa-row">
+        <div class="q">是不是 N/K 没对齐才选不上 DeepGEMM？</div>
+        <div class="a">block-FP8 基本不可能。建层时的 <code>validate_fp8_block_shape</code> 要求 128 对齐，比 DeepGEMM 的 64/128 更严，不满足会直接 raise。</div>
+      </div>
+      <div class="qa-row">
+        <div class="q">MoE 选中 DEEPGEMM 就一定跑 DeepGEMM 吗？</div>
+        <div class="a">不一定。<code>_valid_deep_gemm</code> 有 <code>N &lt;= 512</code> 一条，对这份权重恰好命中；默认 E8M0 开启会把它短路，关掉则每次 forward 回退 Triton。</div>
+      </div>
+      <div class="qa-row">
+        <div class="q">这套结论对别的 FP8 模型也成立吗？</div>
+        <div class="a">机制成立，结论不成立。黑名单只有两个 model_type；换模型请用 <span class="ref">表 28</span> 的推演方式自己走一遍。</div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>时间不够时怎么砍</h2>
+    <div class="cut">
+      <div class="cut-row">
+        <div class="tag">砍到 30′</div>
+        <div class="body">保留 <b>2 · 6 · 7</b> 三段（地基 → 原理 → 案例），把 3、4 段压成一页「两套算法的对照」，5 段整段跳过。</div>
+      </div>
+      <div class="cut-row">
+        <div class="tag">砍到 45′</div>
+        <div class="body">第 5 段只讲 <code>M_sum</code> 膨胀那一个数字，其余口头带过。</div>
+      </div>
+      <div class="cut-row">
+        <div class="tag">深水区</div>
+        <div class="body">默认<b>不讲</b>、留给提问：3.2.1 的三个 Triton 算子（<code>ep_scatter</code> 里顺带做了 UE8M0 位打包）、4.3.2/4.3.3 的接口清单、附录 B 的逐元素数值演示。</div>
+      </div>
+      <div class="cut-row">
+        <div class="tag">延伸阅读</div>
+        <div class="body">会后发三篇姊妹文档：FP8 量化原理与实现、量化识别与分发、DeepSeek-V4 MoE MXFP4。</div>
+      </div>
+    </div>
+  </section>
+
+  <footer>
+    <div>底稿：<code>docs/design/fp8_backend_selection_qwen36.md</code>（6 章 · 16 图 · 29 表 · 附录 A/B/C）</div>
+    <div>案例权重：<code>Qwen3.6-35B-A3B-FP8</code> · 40 层（30 GDN + 10 full attn）· 256 experts top-8 · <code>weight_block_size [128,128]</code></div>
+    <div>所有行号与结论以分支 <code>v0.25.1-self</code> 为准。</div>
+  </footer>
+
+</div>
+
+<script>
+(function () {
+  var root = document.documentElement;
+  var btn = document.getElementById("themeToggle");
+  var stored = null;
+  try { stored = localStorage.getItem("fp8-outline-theme"); } catch (e) {}
+  if (stored === "dark" || stored === "light") root.setAttribute("data-theme", stored);
+
+  btn.addEventListener("click", function () {
+    var current = root.getAttribute("data-theme");
+    if (!current) {
+      var prefersDark = window.matchMedia
+        && window.matchMedia("(prefers-color-scheme: dark)").matches;
+      current = prefersDark ? "dark" : "light";
+    }
+    var next = current === "dark" ? "light" : "dark";
+    root.setAttribute("data-theme", next);
+    try { localStorage.setItem("fp8-outline-theme", next); } catch (e) {}
+  });
+})();
+</script>
+
+</body>
+</html>
